@@ -329,12 +329,12 @@ container_status() {
 
     if pct status "$ctid" 2>/dev/null | grep -q "running"; then
         echo "=== RISORSE ==="
-        pct exec "$ctid" -- bash -c "
-            echo 'CPU: $(top -bn1 | grep \"Cpu(s)\" | awk \"{print \\\$2}\" | cut -d'%' -f1)%'
-            echo 'Memory: $(free -h | awk \"NR==2{printf \\\"%s/%s (%.1f%%)\\\", \\\$3,\\\$2,\\\$3*100/\\\$2}\")'
-            echo 'Disk: $(df -h / | awk \"NR==2{print \\\$3\\\"/\\\"\\\$2\\\" (\\\"\\\$5\\\")\\\"}\")'
-            echo 'Uptime: $(uptime -p)'
-        " 2>/dev/null || echo "Impossibile recuperare informazioni risorse"
+        pct exec "$ctid" -- bash -c '
+            echo "CPU: $(top -bn1 | grep \"Cpu(s)\" | awk \"{print \$2}\" | cut -d\"%\" -f1)%"
+            echo "Memory: $(free -h | awk \"NR==2{printf \"%s/%s (%.1f%%)\", \$3,\$2,\$3*100/\$2}\")"
+            echo "Disk: $(df -h / | awk \"NR==2{print \$3\"/\"\$2\" (\"\$5\")\"}\")"
+            echo "Uptime: $(uptime -p)"
+        ' 2>/dev/null || echo "Impossibile recuperare informazioni risorse"
     fi
 }
 
