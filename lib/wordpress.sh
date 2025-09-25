@@ -634,7 +634,7 @@ install_wordpress() {
     cd "$wp_dir"
 
     # Download WordPress
-    if ! sudo -u www-data wp core download --locale="$WP_LOCALE"; then
+    if ! wp --allow-root core download --locale="$WP_LOCALE"; then
         log_error "Errore download WordPress"
         return 1
     fi
@@ -643,7 +643,7 @@ install_wordpress() {
     local db_prefix="wp_$(openssl rand -hex 3)_"
 
     # Create wp-config.php
-    sudo -u www-data wp config create \
+    wp --allow-root config create \
         --dbname="$DB_NAME" \
         --dbuser="$DB_USER" \
         --dbpass="$DB_PASS" \
@@ -656,7 +656,7 @@ install_wordpress() {
     configure_wordpress_advanced
 
     # Install WordPress
-    sudo -u www-data wp core install \
+    wp --allow-root core install \
         --url="http://$DOMAIN" \
         --title="$SITE_NAME" \
         --admin_user="$WP_ADMIN_USER" \
@@ -723,7 +723,7 @@ define('WP_AUTO_UPDATE_CORE', 'minor');
 EOF
 
     # Generate and add security salts
-    sudo -u www-data wp config shuffle-salts
+    wp --allow-root config shuffle-salts
 
     # Redis configuration if available
     if [[ "${USE_REDIS:-}" == "y"* ]] || [[ "${USE_REDIS,,}" =~ ^(yes|s|si)$ ]]; then
@@ -847,7 +847,7 @@ install_essential_plugins() {
 
     # Install and activate plugins
     for plugin in "${plugins[@]}"; do
-        if sudo -u www-data wp plugin install "$plugin" --activate; then
+        if wp --allow-root plugin install "$plugin" --activate; then
             log_success "Plugin installato: $plugin"
         else
             log_warn "Errore installazione plugin: $plugin"
@@ -915,7 +915,7 @@ configure_wordfence() {
     log_step "Configurazione Wordfence Security..."
 
     # Advanced Wordfence configuration
-    sudo -u www-data wp option update wordfence_version "7.9.0" --quiet 2>/dev/null || true
+    wp --allow-root option update wordfence_version "7.9.0" --quiet 2>/dev/null || true
 
     # Wordfence settings
     local wf_settings='{
@@ -948,7 +948,7 @@ configure_wordfence() {
         "alertEmails_scanIssues": "'${WP_ADMIN_EMAIL}'"
     }'
 
-    sudo -u www-data wp option update wf_settings "$wf_settings" --format=json --quiet 2>/dev/null || log_warn "Wordfence configurazione manuale richiesta"
+    wp --allow-root option update wf_settings "$wf_settings" --format=json --quiet 2>/dev/null || log_warn "Wordfence configurazione manuale richiesta"
 
     log_success "Wordfence configurato"
 }
@@ -976,10 +976,10 @@ configure_wp_optimize() {
         "cleanup_frequency": "weekly"
     }'
 
-    sudo -u www-data wp option update wpo_cache_config "$wpo_settings" --format=json --quiet 2>/dev/null || true
+    wp --allow-root option update wpo_cache_config "$wpo_settings" --format=json --quiet 2>/dev/null || true
 
     # Enable cache
-    sudo -u www-data wp option update wpo_cache_enabled 1 --quiet 2>/dev/null || true
+    wp --allow-root option update wpo_cache_enabled 1 --quiet 2>/dev/null || true
 
     log_success "WP Optimize configurato"
 }
@@ -1012,7 +1012,7 @@ configure_yoast_advanced() {
         "alternate_website_name": ""
     }'
 
-    sudo -u www-data wp option update wpseo "$yoast_settings" --format=json --quiet 2>/dev/null || true
+    wp --allow-root option update wpseo "$yoast_settings" --format=json --quiet 2>/dev/null || true
 
     # XML Sitemaps configuration
     local xml_settings='{
@@ -1027,10 +1027,10 @@ configure_yoast_advanced() {
         "max_entries_per_sitemap": 1000
     }'
 
-    sudo -u www-data wp option update wpseo_xml "$xml_settings" --format=json --quiet 2>/dev/null || true
+    wp --allow-root option update wpseo_xml "$xml_settings" --format=json --quiet 2>/dev/null || true
 
     # Title templates
-    sudo -u www-data wp option update wpseo_titles '{
+    wp --allow-root option update wpseo_titles '{
         "title-home-wpseo": "'${SITE_NAME}' %%page%% %%sep%% %%sitename%%",
         "title-post": "%%title%% %%page%% %%sep%% %%sitename%%",
         "title-page": "%%title%% %%page%% %%sep%% %%sitename%%",
@@ -1070,11 +1070,11 @@ configure_autoptimize() {
     }'
 
     # Apply settings one by one (more reliable)
-    sudo -u www-data wp option update autoptimize_html "on" --quiet 2>/dev/null || true
-    sudo -u www-data wp option update autoptimize_js "on" --quiet 2>/dev/null || true
-    sudo -u www-data wp option update autoptimize_js_defer "on" --quiet 2>/dev/null || true
-    sudo -u www-data wp option update autoptimize_css "on" --quiet 2>/dev/null || true
-    sudo -u www-data wp option update autoptimize_css_defer "on" --quiet 2>/dev/null || true
+    wp --allow-root option update autoptimize_html "on" --quiet 2>/dev/null || true
+    wp --allow-root option update autoptimize_js "on" --quiet 2>/dev/null || true
+    wp --allow-root option update autoptimize_js_defer "on" --quiet 2>/dev/null || true
+    wp --allow-root option update autoptimize_css "on" --quiet 2>/dev/null || true
+    wp --allow-root option update autoptimize_css_defer "on" --quiet 2>/dev/null || true
 
     log_success "Autoptimize configurato"
 }
@@ -1095,7 +1095,7 @@ configure_smush() {
         "usage": 1
     }'
 
-    sudo -u www-data wp option update wp-smush-settings "$smush_settings" --format=json --quiet 2>/dev/null || true
+    wp --allow-root option update wp-smush-settings "$smush_settings" --format=json --quiet 2>/dev/null || true
 
     log_success "Smush configurato"
 }
@@ -1122,7 +1122,7 @@ configure_webp_express() {
         "log-conversions-in-db": false
     }'
 
-    sudo -u www-data wp option update webp-express-settings "$webp_settings" --format=json --quiet 2>/dev/null || true
+    wp --allow-root option update webp-express-settings "$webp_settings" --format=json --quiet 2>/dev/null || true
 
     log_success "WebP Express configurato"
 }
@@ -1132,10 +1132,10 @@ configure_redis_cache() {
 
     # Test Redis connection first
     if test_redis_connection "$REDIS_HOST" "$REDIS_PORT" "$REDIS_PASS"; then
-        if sudo -u www-data wp redis enable --quiet 2>/dev/null; then
+        if wp --allow-root redis enable --quiet 2>/dev/null; then
             # Configure Redis settings
-            sudo -u www-data wp config set WP_REDIS_CLIENT predis --quiet 2>/dev/null || true
-            sudo -u www-data wp config set WP_REDIS_SELECTIVE_FLUSH true --quiet 2>/dev/null || true
+            wp --allow-root config set WP_REDIS_CLIENT predis --quiet 2>/dev/null || true
+            wp --allow-root config set WP_REDIS_SELECTIVE_FLUSH true --quiet 2>/dev/null || true
 
             log_success "Redis Object Cache attivato e configurato"
         else
@@ -1154,7 +1154,7 @@ configure_s3_plugin() {
         create_minio_bucket "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY" "$MINIO_BUCKET"
 
         # Configure S3 plugin
-        sudo -u www-data wp option update amazon_s3_and_cloudfront_settings '{
+        wp --allow-root option update amazon_s3_and_cloudfront_settings '{
             "provider": "other",
             "access-key-id": "'${MINIO_ACCESS_KEY}'",
             "secret-access-key": "'${MINIO_SECRET_KEY}'",
@@ -1197,7 +1197,7 @@ configure_smtp_plugin() {
         }
     }'
 
-    sudo -u www-data wp option update wp_mail_smtp "$smtp_settings" --format=json --quiet 2>/dev/null || true
+    wp --allow-root option update wp_mail_smtp "$smtp_settings" --format=json --quiet 2>/dev/null || true
 
     log_success "SMTP configurato"
 }
@@ -1218,7 +1218,7 @@ configure_schema_plugin() {
         "search_box": true
     }'
 
-    sudo -u www-data wp option update schema_wp_settings "$schema_settings" --format=json --quiet 2>/dev/null || true
+    wp --allow-root option update schema_wp_settings "$schema_settings" --format=json --quiet 2>/dev/null || true
 
     log_success "Schema Plugin configurato"
 }
@@ -1240,7 +1240,7 @@ configure_google_analytics() {
         "download_extensions": "zip,mp3,mpeg,pdf,docx,pptx,xlsx,rar,wma,mov,wmv,avi,flv,wav"
     }'
 
-    sudo -u www-data wp option update exactmetrics_settings "$ga_settings" --format=json --quiet 2>/dev/null || true
+    wp --allow-root option update exactmetrics_settings "$ga_settings" --format=json --quiet 2>/dev/null || true
 
     log_success "Google Analytics configurato"
 }
@@ -1258,7 +1258,7 @@ configure_amp_plugin() {
         "enable_optimizer": true
     }'
 
-    sudo -u www-data wp option update amp-options "$amp_settings" --format=json --quiet 2>/dev/null || true
+    wp --allow-root option update amp-options "$amp_settings" --format=json --quiet 2>/dev/null || true
 
     log_success "AMP configurato"
 }
@@ -1334,7 +1334,7 @@ configure_cookie_law_info() {
         "widget_position": "left"
     }'
 
-    sudo -u www-data wp option update cookielawinfo_settings "$cli_settings" --format=json --quiet 2>/dev/null || true
+    wp --allow-root option update cookielawinfo_settings "$cli_settings" --format=json --quiet 2>/dev/null || true
 
     log_success "Cookie Law Info configurato"
 }
@@ -1364,7 +1364,7 @@ configure_complianz_gdpr() {
         "consent_for_anonymous_tracking": true
     }'
 
-    sudo -u www-data wp option update complianz_options "$complianz_settings" --format=json --quiet 2>/dev/null || true
+    wp --allow-root option update complianz_options "$complianz_settings" --format=json --quiet 2>/dev/null || true
 
     # Configure cookie categories
     local cookie_categories='{
@@ -1385,7 +1385,7 @@ configure_complianz_gdpr() {
         }
     }'
 
-    sudo -u www-data wp option update complianz_cookie_categories "$cookie_categories" --format=json --quiet 2>/dev/null || true
+    wp --allow-root option update complianz_cookie_categories "$cookie_categories" --format=json --quiet 2>/dev/null || true
 
     log_success "Complianz GDPR configurato"
 }
@@ -1504,12 +1504,12 @@ create_privacy_policy_page() {
 <p><em>Questa informativa è conforme al GDPR (Regolamento UE 2016/679) e al Codice Privacy italiano (D.Lgs. 196/2003 e s.m.i.).</em></p>"
 
     # Create page
-    sudo -u www-data wp post create --post_type=page --post_title="Privacy Policy" --post_content="$privacy_content" --post_status=publish --post_name="privacy-policy" --quiet 2>/dev/null || true
+    wp --allow-root post create --post_type=page --post_title="Privacy Policy" --post_content="$privacy_content" --post_status=publish --post_name="privacy-policy" --quiet 2>/dev/null || true
 
     # Set as privacy page
-    local privacy_page_id=$(sudo -u www-data wp post list --post_type=page --name="privacy-policy" --field=ID --quiet 2>/dev/null)
+    local privacy_page_id=$(wp --allow-root post list --post_type=page --name="privacy-policy" --field=ID --quiet 2>/dev/null)
     if [[ -n "$privacy_page_id" ]]; then
-        sudo -u www-data wp option update wp_page_for_privacy_policy "$privacy_page_id" --quiet
+        wp --allow-root option update wp_page_for_privacy_policy "$privacy_page_id" --quiet
     fi
 
     log_info "Privacy Policy page creata"
@@ -1627,7 +1627,7 @@ create_cookie_policy_page() {
 </div>"
 
     # Create page
-    sudo -u www-data wp post create --post_type=page --post_title="Cookie Policy" --post_content="$cookie_content" --post_status=publish --post_name="cookie-policy" --quiet 2>/dev/null || true
+    wp --allow-root post create --post_type=page --post_title="Cookie Policy" --post_content="$cookie_content" --post_status=publish --post_name="cookie-policy" --quiet 2>/dev/null || true
 
     log_info "Cookie Policy page creata"
 }
@@ -1757,7 +1757,7 @@ Web: <a href=\"https://www.garanteprivacy.it\">www.garanteprivacy.it</a></p>
 <li><strong>Oggetto:</strong> \"DPO Request - Data Protection\"</li>
 </ul>"
 
-    sudo -u www-data wp post create --post_type=page --post_title="Protezione Dati" --post_content="$data_protection_content" --post_status=publish --post_name="data-protection" --quiet 2>/dev/null || true
+    wp --allow-root post create --post_type=page --post_title="Protezione Dati" --post_content="$data_protection_content" --post_status=publish --post_name="data-protection" --quiet 2>/dev/null || true
 
     log_info "Data Protection page creata"
 }
@@ -1818,7 +1818,7 @@ create_terms_conditions_page() {
 <li><strong>Sito:</strong> ${DOMAIN}</li>
 </ul>"
 
-    sudo -u www-data wp post create --post_type=page --post_title="Termini e Condizioni" --post_content="$terms_content" --post_status=publish --post_name="termini-condizioni" --quiet 2>/dev/null || true
+    wp --allow-root post create --post_type=page --post_title="Termini e Condizioni" --post_content="$terms_content" --post_status=publish --post_name="termini-condizioni" --quiet 2>/dev/null || true
 
     log_info "Terms and Conditions page creata"
 }
@@ -1827,18 +1827,18 @@ configure_wordpress_privacy() {
     log_step "Configurazione privacy WordPress nativa..."
 
     # Enable privacy features
-    sudo -u www-data wp option update wp_privacy_policy_content_template_active 1 --quiet
+    wp --allow-root option update wp_privacy_policy_content_template_active 1 --quiet
 
     # Configure comment moderation
-    sudo -u www-data wp option update comment_moderation 1 --quiet
-    sudo -u www-data wp option update moderation_notify 1 --quiet
+    wp --allow-root option update comment_moderation 1 --quiet
+    wp --allow-root option update moderation_notify 1 --quiet
 
     # Configure user registration
-    sudo -u www-data wp option update default_role subscriber --quiet
-    sudo -u www-data wp option update users_can_register 0 --quiet
+    wp --allow-root option update default_role subscriber --quiet
+    wp --allow-root option update users_can_register 0 --quiet
 
     # Configure data export/erase settings
-    sudo -u www-data wp option update wp_user_request_cleanup_interval 86400 --quiet
+    wp --allow-root option update wp_user_request_cleanup_interval 86400 --quiet
 
     log_success "WordPress privacy configurato"
 }
@@ -1859,7 +1859,7 @@ configure_ga_gdpr() {
         "enhanced_link_attribution": false
     }'
 
-    sudo -u www-data wp option update exactmetrics_settings "$ga_gdpr_settings" --format=json --quiet 2>/dev/null || true
+    wp --allow-root option update exactmetrics_settings "$ga_gdpr_settings" --format=json --quiet 2>/dev/null || true
 
     log_success "Google Analytics configurato per GDPR"
 }
@@ -1868,8 +1868,8 @@ configure_privacy_forms() {
     log_step "Configurazione moduli privacy-compliant..."
 
     # Install Contact Form 7 if not present
-    if ! sudo -u www-data wp plugin is-installed contact-form-7 --quiet 2>/dev/null; then
-        sudo -u www-data wp plugin install contact-form-7 --activate --quiet 2>/dev/null || true
+    if ! wp --allow-root plugin is-installed contact-form-7 --quiet 2>/dev/null; then
+        wp --allow-root plugin install contact-form-7 --activate --quiet 2>/dev/null || true
     fi
 
     # Create GDPR-compliant contact form
@@ -1910,7 +1910,7 @@ Privacy policy accettata: [acceptance-privacy]
 Marketing accettato: [acceptance-marketing]"
 
     # Create contact form via WP-CLI
-    sudo -u www-data wp contact-form-7 create --title="Contatto Privacy-Compliant" --form="$form_content" --mail-body="$mail_content" --quiet 2>/dev/null || true
+    wp --allow-root contact-form-7 create --title="Contatto Privacy-Compliant" --form="$form_content" --mail-body="$mail_content" --quiet 2>/dev/null || true
 
     log_info "Contact form GDPR-compliant creato"
 }
@@ -1925,7 +1925,7 @@ install_optimized_theme() {
     cd "/var/www/${DOMAIN}"
 
     # Install GeneratePress (free version)
-    if sudo -u www-data wp theme install generatepress --activate --quiet; then
+    if wp --allow-root theme install generatepress --activate --quiet; then
         log_success "GeneratePress installato e attivato"
 
         # Configure GeneratePress for performance
@@ -1972,7 +1972,7 @@ configure_generatepress_performance() {
         "inline_logo_site_branding": false
     }'
 
-    sudo -u www-data wp option update generate_settings "$gp_settings" --format=json --quiet 2>/dev/null || true
+    wp --allow-root option update generate_settings "$gp_settings" --format=json --quiet 2>/dev/null || true
 
     # Performance-focused customizer settings
     configure_customizer_performance
@@ -2210,7 +2210,7 @@ function disable_x_pingback($headers) {
 CHILD_FUNCTIONS_EOF
 
     # Activate child theme
-    sudo -u www-data wp theme activate generatepress-child --quiet 2>/dev/null || true
+    wp --allow-root theme activate generatepress-child --quiet 2>/dev/null || true
 
     chown -R www-data:www-data "$child_dir"
 
@@ -2221,7 +2221,7 @@ configure_customizer_performance() {
     log_step "Configurazione Customizer per performance..."
 
     # Typography settings for performance
-    sudo -u www-data wp option update generate_font_manager_google_fonts '' --quiet 2>/dev/null || true
+    wp --allow-root option update generate_font_manager_google_fonts '' --quiet 2>/dev/null || true
 
     # Color settings
     local colors='{
@@ -2232,7 +2232,7 @@ configure_customizer_performance() {
         "link_color_hover": "#005a99"
     }'
 
-    sudo -u www-data wp option update generate_colors "$colors" --format=json --quiet 2>/dev/null || true
+    wp --allow-root option update generate_colors "$colors" --format=json --quiet 2>/dev/null || true
 
     # Spacing settings for mobile optimization
     local spacing='{
@@ -2242,7 +2242,7 @@ configure_customizer_performance() {
         "sidebar_width": "25%"
     }'
 
-    sudo -u www-data wp option update generate_spacing "$spacing" --format=json --quiet 2>/dev/null || true
+    wp --allow-root option update generate_spacing "$spacing" --format=json --quiet 2>/dev/null || true
 
     log_success "Customizer configurato"
 }
@@ -2251,25 +2251,25 @@ optimize_theme_settings() {
     log_step "Ottimizzazione impostazioni tema..."
 
     # WordPress core settings for performance
-    sudo -u www-data wp option update thumbnail_size_w 150 --quiet
-    sudo -u www-data wp option update thumbnail_size_h 150 --quiet
-    sudo -u www-data wp option update medium_size_w 300 --quiet
-    sudo -u www-data wp option update medium_size_h 300 --quiet
-    sudo -u www-data wp option update large_size_w 1024 --quiet
-    sudo -u www-data wp option update large_size_h 1024 --quiet
+    wp --allow-root option update thumbnail_size_w 150 --quiet
+    wp --allow-root option update thumbnail_size_h 150 --quiet
+    wp --allow-root option update medium_size_w 300 --quiet
+    wp --allow-root option update medium_size_h 300 --quiet
+    wp --allow-root option update large_size_w 1024 --quiet
+    wp --allow-root option update large_size_h 1024 --quiet
 
     # Enable responsive images
-    sudo -u www-data wp option update medium_large_size_w 768 --quiet
-    sudo -u www-data wp option update medium_large_size_h 0 --quiet
+    wp --allow-root option update medium_large_size_w 768 --quiet
+    wp --allow-root option update medium_large_size_h 0 --quiet
 
     # Reading settings for SEO
-    sudo -u www-data wp option update posts_per_page 10 --quiet
-    sudo -u www-data wp option update posts_per_rss 10 --quiet
-    sudo -u www-data wp option update rss_use_excerpt 1 --quiet
+    wp --allow-root option update posts_per_page 10 --quiet
+    wp --allow-root option update posts_per_rss 10 --quiet
+    wp --allow-root option update rss_use_excerpt 1 --quiet
 
     # Discussion settings for performance
-    sudo -u www-data wp option update default_ping_status "closed" --quiet
-    sudo -u www-data wp option update default_comment_status "open" --quiet
+    wp --allow-root option update default_ping_status "closed" --quiet
+    wp --allow-root option update default_comment_status "open" --quiet
 
     log_success "Impostazioni tema ottimizzate"
 }
@@ -2278,7 +2278,7 @@ configure_default_theme() {
     log_step "Configurazione tema di default..."
 
     # If GeneratePress fails, optimize default theme
-    local active_theme=$(sudo -u www-data wp theme list --status=active --field=name --quiet 2>/dev/null || echo "")
+    local active_theme=$(wp --allow-root theme list --status=active --field=name --quiet 2>/dev/null || echo "")
 
     if [[ -n "$active_theme" ]]; then
         log_info "Configurazione tema attivo: $active_theme"
@@ -2321,7 +2321,7 @@ install_elementor() {
 
     # Install Elementor only if user wants it
     if [[ "${INSTALL_ELEMENTOR:-}" == "true" ]]; then
-        if sudo -u www-data wp plugin install elementor --activate --quiet 2>/dev/null; then
+        if wp --allow-root plugin install elementor --activate --quiet 2>/dev/null; then
             # Configure Elementor for performance
             configure_elementor_performance
             log_success "Elementor installato e configurato"
@@ -2346,7 +2346,7 @@ configure_elementor_performance() {
         "optimized_control_loading": "enabled"
     }'
 
-    sudo -u www-data wp option update elementor_performance_settings "$elementor_settings" --format=json --quiet 2>/dev/null || true
+    wp --allow-root option update elementor_performance_settings "$elementor_settings" --format=json --quiet 2>/dev/null || true
 
     log_success "Elementor configurato per performance"
 }
@@ -2452,7 +2452,7 @@ configure_yoast_seo() {
     log_step "Configurazione Yoast SEO..."
 
     # Basic Yoast SEO settings
-    sudo -u www-data wp option update wpseo '{
+    wp --allow-root option update wpseo '{
         "ms_defaults_set": true,
         "version": "22.0",
         "disableadvanced_meta": false,
@@ -2475,7 +2475,7 @@ configure_yoast_seo() {
     }' --format=json 2>/dev/null || log_warn "Yoast SEO non ancora attivo"
 
     # Enable XML sitemaps
-    sudo -u www-data wp option update wpseo_xml '{
+    wp --allow-root option update wpseo_xml '{
         "sitemap_index": "on",
         "post_types-post": "on",
         "post_types-page": "on",
@@ -2493,7 +2493,7 @@ configure_seo_plugins() {
     log_step "Configurazione plugin SEO aggiuntivi..."
 
     # Configure Schema plugin
-    sudo -u www-data wp option update schema_wp_settings '{
+    wp --allow-root option update schema_wp_settings '{
         "schema_type": "Organization",
         "site_name": "'"${SITE_NAME}"'",
         "site_logo": "",
@@ -2503,7 +2503,7 @@ configure_seo_plugins() {
     }' --format=json 2>/dev/null || log_warn "Schema plugin non configurato"
 
     # Configure Google Analytics (if plugin active)
-    sudo -u www-data wp option update exactmetrics_settings '{
+    wp --allow-root option update exactmetrics_settings '{
         "analytics_profile": "",
         "manual_ua_code_hidden": "",
         "hide_admin_bar_reports": "",
@@ -2514,7 +2514,7 @@ configure_seo_plugins() {
     }' --format=json 2>/dev/null || log_warn "Google Analytics non configurato"
 
     # Enable AMP if installed
-    sudo -u www-data wp option update amp-options '{
+    wp --allow-root option update amp-options '{
         "theme_support": "standard",
         "supported_post_types": ["post", "page"],
         "analytics": {},
@@ -2551,8 +2551,8 @@ setup_ssl_certificates() {
 
         # Update site URL
         cd "/var/www/${DOMAIN}"
-        sudo -u www-data wp option update home "https://$DOMAIN"
-        sudo -u www-data wp option update siteurl "https://$DOMAIN"
+        wp --allow-root option update home "https://$DOMAIN"
+        wp --allow-root option update siteurl "https://$DOMAIN"
 
     else
         log_warn "⚠ SSL non configurato (dominio non raggiungibile pubblicamente)"
