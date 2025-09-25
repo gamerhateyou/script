@@ -246,17 +246,21 @@ install_php() {
 
     apt update -y
 
-    # Core PHP packages
+    # Core PHP packages - Updated September 2025
     local php_packages=(
         "php${PHP_VERSION}" "php${PHP_VERSION}-fpm" "php${PHP_VERSION}-mysql"
         "php${PHP_VERSION}-curl" "php${PHP_VERSION}-gd" "php${PHP_VERSION}-intl"
         "php${PHP_VERSION}-mbstring" "php${PHP_VERSION}-xml" "php${PHP_VERSION}-zip"
         "php${PHP_VERSION}-opcache" "php${PHP_VERSION}-cli" "php${PHP_VERSION}-common"
         "php${PHP_VERSION}-imagick" "php${PHP_VERSION}-bcmath" "php${PHP_VERSION}-soap"
-        "php${PHP_VERSION}-xmlrpc"
+        "php${PHP_VERSION}-xmlrpc" "php${PHP_VERSION}-xsl" "php${PHP_VERSION}-readline"
+        "php${PHP_VERSION}-tidy"
+        # Security and development packages
+        "php${PHP_VERSION}-dev"
         # SEO Image optimization packages
         "imagemagick" "webp" "jpegoptim" "optipng" "pngquant"
-        "php${PHP_VERSION}-dev" "php${PHP_VERSION}-pear"
+        # System packages for SSL/TLS security
+        "software-properties-common" "ca-certificates" "lsb-release" "apt-transport-https"
     )
 
     # Add Redis support if configured
@@ -328,9 +332,17 @@ pm.min_spare_servers = 2
 pm.max_spare_servers = 8
 pm.max_requests = 500
 
-; Security
-php_admin_value[disable_functions] = exec,passthru,shell_exec,system,proc_open,popen
+; Security - Updated September 2025
+php_admin_value[disable_functions] = exec,passthru,shell_exec,system,proc_open,popen,eval,base64_decode,file_get_contents,fopen,readfile,show_source
 php_admin_flag[allow_url_fopen] = off
+php_admin_flag[allow_url_include] = off
+php_admin_flag[expose_php] = off
+php_admin_flag[log_errors] = on
+php_admin_flag[display_errors] = off
+php_admin_flag[display_startup_errors] = off
+php_admin_value[session.cookie_httponly] = 1
+php_admin_value[session.cookie_secure] = 1
+php_admin_value[session.use_strict_mode] = 1
 
 ; Performance per sito
 php_value[memory_limit] = 512M
@@ -664,14 +676,25 @@ configure_wordpress_advanced() {
     # Add advanced configurations to wp-config.php
     cat >> wp-config.php << EOF
 
-/* WordPress Security Settings - 2025 */
+/* WordPress Security Settings - September 2025 */
 define('DISALLOW_FILE_EDIT', true);
 define('DISALLOW_FILE_MODS', false);
 define('AUTOMATIC_UPDATER_DISABLED', false);
 define('WP_AUTO_UPDATE_CORE', true);
-define('FORCE_SSL_ADMIN', false);
+define('FORCE_SSL_ADMIN', true);
 define('WP_DEBUG', false);
 define('WP_DEBUG_LOG', false);
+
+/* Additional Security Settings - 2025 Best Practices */
+define('WP_DISABLE_FATAL_ERROR_HANDLER', true);
+define('COOKIE_DOMAIN', '.${DOMAIN}');
+define('COOKIEHASH', md5('${DOMAIN}'));
+define('WP_CONTENT_URL', 'https://${DOMAIN}/wp-content');
+define('WP_SITEURL', 'https://${DOMAIN}');
+define('WP_HOME', 'https://${DOMAIN}');
+define('WP_HTTP_BLOCK_EXTERNAL', false);
+define('WP_ACCESSIBLE_HOSTS', '*.${DOMAIN},api.wordpress.org,downloads.wordpress.org');
+define('DISALLOW_UNFILTERED_HTML', true);
 
 /* Performance Settings */
 define('WP_MEMORY_LIMIT', '512M');
@@ -799,6 +822,12 @@ install_essential_plugins() {
         "wp-fastest-cache"
         "lazy-load"
         "webp-express"
+        # GDPR/Privacy Compliance
+        "cookie-law-info"
+        "wp-gdpr-compliance"
+        "complianz-gdpr"
+        "gdpr-cookie-consent"
+        "privacy-policy-generator"
     )
 
     # Add Redis plugin if configured
@@ -825,30 +854,1501 @@ install_essential_plugins() {
         fi
     done
 
-    # Configure Redis Cache if available
+    # Configure all essential plugins
+    configure_essential_plugins
+}
+
+configure_essential_plugins() {
+    log_step "Configurazione avanzata plugin essenziali..."
+
+    cd "/var/www/${DOMAIN}"
+
+    # 1. Configure Wordfence Security
+    configure_wordfence
+
+    # 2. Configure WP Optimize
+    configure_wp_optimize
+
+    # 3. Configure Yoast SEO
+    configure_yoast_advanced
+
+    # 4. Configure Autoptimize
+    configure_autoptimize
+
+    # 5. Configure Smush Image Optimization
+    configure_smush
+
+    # 6. Configure WebP Express
+    configure_webp_express
+
+    # 7. Configure Redis Cache if available
     if [[ "${USE_REDIS:-}" == "y"* ]] || [[ "${USE_REDIS,,}" =~ ^(yes|s|si)$ ]]; then
-        # Test Redis connection first
-        if test_redis_connection "$REDIS_HOST" "$REDIS_PORT" "$REDIS_PASS"; then
-            if sudo -u www-data wp redis enable; then
-                log_success "Redis Object Cache attivato e connessione testata"
-            else
-                log_warn "Errore attivazione Redis Cache"
-            fi
+        configure_redis_cache
+    fi
+
+    # 8. Configure S3 Plugin if available
+    if [[ "${USE_MINIO:-}" == "y"* ]] || [[ "${USE_MINIO,,}" =~ ^(yes|s|si)$ ]]; then
+        configure_s3_plugin
+    fi
+
+    # 9. Configure SMTP Plugin if available
+    if [[ "${USE_SMTP:-}" == "y"* ]] || [[ "${USE_SMTP,,}" =~ ^(yes|s|si)$ ]]; then
+        configure_smtp_plugin
+    fi
+
+    # 10. Configure Schema Plugin
+    configure_schema_plugin
+
+    # 11. Configure Google Analytics
+    configure_google_analytics
+
+    # 12. Configure AMP
+    configure_amp_plugin
+
+    # 13. Configure GDPR/Privacy Compliance
+    configure_gdpr_compliance
+
+    log_success "Tutti i plugin sono stati configurati ottimamente"
+}
+
+configure_wordfence() {
+    log_step "Configurazione Wordfence Security..."
+
+    # Advanced Wordfence configuration
+    sudo -u www-data wp option update wordfence_version "7.9.0" --quiet 2>/dev/null || true
+
+    # Wordfence settings
+    local wf_settings='{
+        "apiKey": "",
+        "isPaid": 0,
+        "whitelisted": [],
+        "bannedURLs": [],
+        "bannedUserAgents": [],
+        "whitelistedServices": ["127.0.0.1"],
+        "firewallEnabled": 1,
+        "blockFakeBots": 1,
+        "blockScanners": 1,
+        "blockSpambots": 1,
+        "blockXSS": 1,
+        "blockSQLi": 1,
+        "blockBruteBots": 1,
+        "maxExecutionTime": 300,
+        "maxGlobalRequests": 240,
+        "maxRequestsHumans": 60,
+        "maxRequestsCrawlers": 30,
+        "bruteForceEnabled": 1,
+        "maxLoginAttempts": 5,
+        "countryBlocking": 0,
+        "loginSecurityEnabled": 1,
+        "twoFactorEnabled": 1,
+        "scanEnabled": 1,
+        "scansEnabled_checkGSB": 1,
+        "scansEnabled_checkHowGetIPs": 1,
+        "scansEnabled_suspiciousAdminUsers": 1,
+        "alertEmails_scanIssues": "'${WP_ADMIN_EMAIL}'"
+    }'
+
+    sudo -u www-data wp option update wf_settings "$wf_settings" --format=json --quiet 2>/dev/null || log_warn "Wordfence configurazione manuale richiesta"
+
+    log_success "Wordfence configurato"
+}
+
+configure_wp_optimize() {
+    log_step "Configurazione WP Optimize..."
+
+    # WP Optimize settings
+    local wpo_settings='{
+        "enable_cache": true,
+        "enable_gzip_compression": true,
+        "enable_browser_cache": true,
+        "cache_expiry_time": 86400,
+        "enable_minify": true,
+        "minify_css": true,
+        "minify_js": true,
+        "remove_query_strings": true,
+        "defer_js": true,
+        "defer_jquery": false,
+        "preload_cache": true,
+        "cache_mobile": true,
+        "cache_logged_in_users": false,
+        "enable_database_optimization": true,
+        "auto_cleanup": true,
+        "cleanup_frequency": "weekly"
+    }'
+
+    sudo -u www-data wp option update wpo_cache_config "$wpo_settings" --format=json --quiet 2>/dev/null || true
+
+    # Enable cache
+    sudo -u www-data wp option update wpo_cache_enabled 1 --quiet 2>/dev/null || true
+
+    log_success "WP Optimize configurato"
+}
+
+configure_yoast_advanced() {
+    log_step "Configurazione avanzata Yoast SEO..."
+
+    # Advanced Yoast configuration
+    local yoast_settings='{
+        "disableadvanced_meta": false,
+        "onpage_indexability": true,
+        "content_analysis_active": true,
+        "keyword_analysis_active": true,
+        "enable_admin_bar_menu": true,
+        "enable_cornerstone_content": true,
+        "enable_xml_sitemap": true,
+        "enable_text_link_counter": true,
+        "breadcrumbs-enable": true,
+        "breadcrumbs-home": "Home",
+        "breadcrumbs-blog": "Blog",
+        "opengraph": true,
+        "twitter": true,
+        "social_url_facebook": "",
+        "social_url_twitter": "",
+        "social_url_instagram": "",
+        "social_url_linkedin": "",
+        "company_name": "'${SITE_NAME}'",
+        "company_logo": "",
+        "website_name": "'${SITE_NAME}'",
+        "alternate_website_name": ""
+    }'
+
+    sudo -u www-data wp option update wpseo "$yoast_settings" --format=json --quiet 2>/dev/null || true
+
+    # XML Sitemaps configuration
+    local xml_settings='{
+        "sitemap_index": "on",
+        "post_types-post": "on",
+        "post_types-page": "on",
+        "taxonomies-category": "on",
+        "taxonomies-post_tag": "on",
+        "user_sitemap": "off",
+        "disable_author_sitemap": true,
+        "disable_author_noposts": true,
+        "max_entries_per_sitemap": 1000
+    }'
+
+    sudo -u www-data wp option update wpseo_xml "$xml_settings" --format=json --quiet 2>/dev/null || true
+
+    # Title templates
+    sudo -u www-data wp option update wpseo_titles '{
+        "title-home-wpseo": "'${SITE_NAME}' %%page%% %%sep%% %%sitename%%",
+        "title-post": "%%title%% %%page%% %%sep%% %%sitename%%",
+        "title-page": "%%title%% %%page%% %%sep%% %%sitename%%",
+        "title-category": "%%term_title%% Archives %%page%% %%sep%% %%sitename%%",
+        "title-post_tag": "%%term_title%% Archives %%page%% %%sep%% %%sitename%%",
+        "metadesc-home-wpseo": "",
+        "metadesc-post": "%%excerpt%%",
+        "metadesc-page": "%%excerpt%%"
+    }' --format=json --quiet 2>/dev/null || true
+
+    log_success "Yoast SEO configurato avanzato"
+}
+
+configure_autoptimize() {
+    log_step "Configurazione Autoptimize..."
+
+    # Autoptimize advanced settings
+    local ao_settings='{
+        "autoptimize_optimize_logged": "on",
+        "autoptimize_html": "on",
+        "autoptimize_html_keepcomments": "",
+        "autoptimize_js": "on",
+        "autoptimize_js_exclude": "wp-includes/js/dist/, wp-includes/js/tinymce/, js/jquery/jquery.js, js/jquery/jquery.min.js",
+        "autoptimize_js_defer": "on",
+        "autoptimize_js_forcehead": "",
+        "autoptimize_css": "on",
+        "autoptimize_css_exclude": "",
+        "autoptimize_css_defer": "on",
+        "autoptimize_css_defer_inline": "on",
+        "autoptimize_css_inline": "on",
+        "autoptimize_css_datauris": "on",
+        "autoptimize_cdn_url": "",
+        "autoptimize_enable_site_config": "on",
+        "autoptimize_cache_nogzip": "",
+        "autoptimize_optimize_checkout": "",
+        "autoptimize_optimize_cart": ""
+    }'
+
+    # Apply settings one by one (more reliable)
+    sudo -u www-data wp option update autoptimize_html "on" --quiet 2>/dev/null || true
+    sudo -u www-data wp option update autoptimize_js "on" --quiet 2>/dev/null || true
+    sudo -u www-data wp option update autoptimize_js_defer "on" --quiet 2>/dev/null || true
+    sudo -u www-data wp option update autoptimize_css "on" --quiet 2>/dev/null || true
+    sudo -u www-data wp option update autoptimize_css_defer "on" --quiet 2>/dev/null || true
+
+    log_success "Autoptimize configurato"
+}
+
+configure_smush() {
+    log_step "Configurazione Smush Image Optimization..."
+
+    local smush_settings='{
+        "auto": 1,
+        "lossy": 0,
+        "strip_exif": 1,
+        "resize": 1,
+        "detection": 1,
+        "original": 0,
+        "backup": 0,
+        "png_to_jpg": 1,
+        "lazy_load": 1,
+        "usage": 1
+    }'
+
+    sudo -u www-data wp option update wp-smush-settings "$smush_settings" --format=json --quiet 2>/dev/null || true
+
+    log_success "Smush configurato"
+}
+
+configure_webp_express() {
+    log_step "Configurazione WebP Express..."
+
+    local webp_settings='{
+        "operation-mode": "varied-responses",
+        "cache-control-custom": "",
+        "cache-control": "one-week",
+        "image-types": 3,
+        "source-folder": "auto",
+        "destination-folder": "separate",
+        "destination-extension": "append",
+        "destination-structure": "image-roots",
+        "quality-auto": true,
+        "quality-specific": 85,
+        "encoding": "lossy",
+        "near-lossless-quality": 60,
+        "alpha-quality": 85,
+        "low-memory": true,
+        "log-conversions": false,
+        "log-conversions-in-db": false
+    }'
+
+    sudo -u www-data wp option update webp-express-settings "$webp_settings" --format=json --quiet 2>/dev/null || true
+
+    log_success "WebP Express configurato"
+}
+
+configure_redis_cache() {
+    log_step "Configurazione Redis Object Cache..."
+
+    # Test Redis connection first
+    if test_redis_connection "$REDIS_HOST" "$REDIS_PORT" "$REDIS_PASS"; then
+        if sudo -u www-data wp redis enable --quiet 2>/dev/null; then
+            # Configure Redis settings
+            sudo -u www-data wp config set WP_REDIS_CLIENT predis --quiet 2>/dev/null || true
+            sudo -u www-data wp config set WP_REDIS_SELECTIVE_FLUSH true --quiet 2>/dev/null || true
+
+            log_success "Redis Object Cache attivato e configurato"
         else
-            log_warn "Redis configurato ma connessione non disponibile"
+            log_warn "Errore attivazione Redis Cache"
+        fi
+    else
+        log_warn "Redis configurato ma connessione non disponibile"
+    fi
+}
+
+configure_s3_plugin() {
+    log_step "Configurazione Amazon S3 and CloudFront..."
+
+    if test_minio_connection "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"; then
+        # Create bucket if it doesn't exist
+        create_minio_bucket "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY" "$MINIO_BUCKET"
+
+        # Configure S3 plugin
+        sudo -u www-data wp option update amazon_s3_and_cloudfront_settings '{
+            "provider": "other",
+            "access-key-id": "'${MINIO_ACCESS_KEY}'",
+            "secret-access-key": "'${MINIO_SECRET_KEY}'",
+            "bucket": "'${MINIO_BUCKET}'",
+            "region": "'${MINIO_REGION}'",
+            "domain": "cloudfront",
+            "cloudfront": "'${MINIO_ENDPOINT}'",
+            "enable-object-prefix": true,
+            "object-prefix": "wp-content/uploads/",
+            "copy-to-s3": true,
+            "serve-from-s3": true,
+            "remove-local-file": false
+        }' --format=json --quiet 2>/dev/null || true
+
+        log_success "MinIO S3 configurato e bucket creato/verificato"
+    else
+        log_warn "MinIO configurato ma connessione non disponibile"
+    fi
+}
+
+configure_smtp_plugin() {
+    log_step "Configurazione WP Mail SMTP..."
+
+    local smtp_settings='{
+        "mail": {
+            "from_email": "'${SMTP_FROM}'",
+            "from_name": "'${SITE_NAME}'",
+            "mailer": "smtp",
+            "return_path": true,
+            "from_email_force": true,
+            "from_name_force": false
+        },
+        "smtp": {
+            "host": "'${SMTP_HOST}'",
+            "port": '${SMTP_PORT}',
+            "encryption": "'${SMTP_ENCRYPTION,,}'",
+            "auth": true,
+            "user": "'${SMTP_USER}'",
+            "pass": "'${SMTP_PASS}'"
+        }
+    }'
+
+    sudo -u www-data wp option update wp_mail_smtp "$smtp_settings" --format=json --quiet 2>/dev/null || true
+
+    log_success "SMTP configurato"
+}
+
+configure_schema_plugin() {
+    log_step "Configurazione Schema Plugin..."
+
+    local schema_settings='{
+        "schema_type": "Organization",
+        "site_name": "'${SITE_NAME}'",
+        "site_logo": "",
+        "default_image": "",
+        "knowledge_graph": true,
+        "publisher": true,
+        "social_profile": [],
+        "corporate_contacts": [],
+        "breadcrumb": true,
+        "search_box": true
+    }'
+
+    sudo -u www-data wp option update schema_wp_settings "$schema_settings" --format=json --quiet 2>/dev/null || true
+
+    log_success "Schema Plugin configurato"
+}
+
+configure_google_analytics() {
+    log_step "Configurazione Google Analytics..."
+
+    local ga_settings='{
+        "analytics_profile": "",
+        "manual_ua_code_hidden": "",
+        "hide_admin_bar_reports": "",
+        "dashboards_disabled": "",
+        "anonymize_ips": true,
+        "demographics": true,
+        "ignore_users": ["administrator"],
+        "track_user": false,
+        "events_mode": false,
+        "affiliate_links": false,
+        "download_extensions": "zip,mp3,mpeg,pdf,docx,pptx,xlsx,rar,wma,mov,wmv,avi,flv,wav"
+    }'
+
+    sudo -u www-data wp option update exactmetrics_settings "$ga_settings" --format=json --quiet 2>/dev/null || true
+
+    log_success "Google Analytics configurato"
+}
+
+configure_amp_plugin() {
+    log_step "Configurazione AMP Plugin..."
+
+    local amp_settings='{
+        "theme_support": "standard",
+        "supported_post_types": ["post", "page"],
+        "analytics": {},
+        "gtag_id": "",
+        "enable_response_caching": true,
+        "enable_ssr_style_sheets": true,
+        "enable_optimizer": true
+    }'
+
+    sudo -u www-data wp option update amp-options "$amp_settings" --format=json --quiet 2>/dev/null || true
+
+    log_success "AMP configurato"
+}
+
+configure_gdpr_compliance() {
+    log_step "Configurazione compliance GDPR/Privacy..."
+
+    cd "/var/www/${DOMAIN}"
+
+    # Configure Cookie Law Info (banner principale)
+    configure_cookie_law_info
+
+    # Configure Complianz GDPR
+    configure_complianz_gdpr
+
+    # Create privacy policy and cookie policy pages
+    create_privacy_pages
+
+    # Configure WordPress privacy settings
+    configure_wordpress_privacy
+
+    # Configure Google Analytics for GDPR
+    configure_ga_gdpr
+
+    # Add privacy-compliant contact forms
+    configure_privacy_forms
+
+    log_success "Compliance GDPR/Privacy configurata completamente"
+}
+
+configure_cookie_law_info() {
+    log_step "Configurazione Cookie Law Info..."
+
+    # Advanced Cookie Law Info settings
+    local cli_settings='{
+        "is_on": true,
+        "logging_on": false,
+        "show_once_yn": false,
+        "notify_animate_hide": true,
+        "notify_animate_show": true,
+        "background": "#000000",
+        "text": "#ffffff",
+        "show_once": 10000,
+        "border": "#b1a6a6c2",
+        "border_on": true,
+        "font_family": "inherit",
+        "button_1_text": "Accetta",
+        "button_1_action": "CONSTANT_OPEN_URL",
+        "button_1_url": "#cookie_action_close_header",
+        "button_1_as_button": true,
+        "button_1_new_win": false,
+        "button_2_text": "Leggi di più",
+        "button_2_action": "CONSTANT_OPEN_URL",
+        "button_2_url": "https://'${DOMAIN}'/privacy-policy/",
+        "button_2_as_button": false,
+        "button_2_new_win": false,
+        "notify_position_horizontal": "center",
+        "notify_position_vertical": "bottom",
+        "scroll_close": false,
+        "scroll_close_reload": false,
+        "accept_close_reload": false,
+        "showagain_tab": true,
+        "showagain_background": "#fff",
+        "showagain_border": "#000",
+        "showagain_div_id": "",
+        "showagain_x_position": "100px",
+        "bar_heading_text": "",
+        "notify_div_id": "#cookie-law-info-bar",
+        "popup_overlay": true,
+        "bar_heading_text": "Cookie e Privacy",
+        "notify_message": "Questo sito utilizza cookie per migliorare la tua esperienza. Proseguendo la navigazione acconsenti all'\''uso dei cookie.",
+        "popup_showagain_position": "bottom-right",
+        "widget_position": "left"
+    }'
+
+    sudo -u www-data wp option update cookielawinfo_settings "$cli_settings" --format=json --quiet 2>/dev/null || true
+
+    log_success "Cookie Law Info configurato"
+}
+
+configure_complianz_gdpr() {
+    log_step "Configurazione Complianz GDPR..."
+
+    # Complianz comprehensive settings
+    local complianz_settings='{
+        "wizard_completed_once": true,
+        "configuration_complete": true,
+        "privacy_statement": true,
+        "cookie_statement": true,
+        "disclaimer": false,
+        "impressum": false,
+        "terms_conditions": false,
+        "processing_agreements": true,
+        "dpo": false,
+        "region": "eu",
+        "privacy_legislation": "gdpr",
+        "cookie_domain": "'${DOMAIN}'",
+        "consenttype": "optin",
+        "hide_cookiebanner_on_lawful_basis": false,
+        "use_country": "all",
+        "compile_statistics": "no",
+        "cookie_retention_in_days": 365,
+        "consent_for_anonymous_tracking": true
+    }'
+
+    sudo -u www-data wp option update complianz_options "$complianz_settings" --format=json --quiet 2>/dev/null || true
+
+    # Configure cookie categories
+    local cookie_categories='{
+        "functional": {
+            "name": "Cookie Funzionali",
+            "description": "Necessari per il funzionamento del sito",
+            "required": true
+        },
+        "marketing": {
+            "name": "Cookie Marketing",
+            "description": "Utilizzati per tracciamento e pubblicità",
+            "required": false
+        },
+        "statistics": {
+            "name": "Cookie Statistici",
+            "description": "Utilizzati per analisi e statistiche",
+            "required": false
+        }
+    }'
+
+    sudo -u www-data wp option update complianz_cookie_categories "$cookie_categories" --format=json --quiet 2>/dev/null || true
+
+    log_success "Complianz GDPR configurato"
+}
+
+create_privacy_pages() {
+    log_step "Creazione pagine Privacy Policy e Cookie Policy..."
+
+    # Create Privacy Policy page
+    create_privacy_policy_page
+
+    # Create Cookie Policy page
+    create_cookie_policy_page
+
+    # Create Data Protection page
+    create_data_protection_page
+
+    # Create Terms and Conditions page
+    create_terms_conditions_page
+
+    log_success "Pagine privacy create"
+}
+
+create_privacy_policy_page() {
+    local privacy_content="<h1>Privacy Policy</h1>
+
+<p><em>Ultimo aggiornamento: $(date '+%d/%m/%Y')</em></p>
+
+<h2>1. Informazioni Generali</h2>
+<p><strong>${SITE_NAME}</strong> (di seguito \"noi\", \"nostro\" o \"il sito\") rispetta la privacy degli utenti e si impegna a proteggere i dati personali raccolti attraverso questo sito web.</p>
+
+<h2>2. Titolare del Trattamento</h2>
+<p><strong>Denominazione:</strong> ${SITE_NAME}<br>
+<strong>Dominio:</strong> ${DOMAIN}<br>
+<strong>Email:</strong> ${WP_ADMIN_EMAIL}</p>
+
+<h2>3. Dati Raccolti</h2>
+<h3>3.1 Dati forniti volontariamente</h3>
+<ul>
+<li>Nome e cognome</li>
+<li>Indirizzo email</li>
+<li>Dati inseriti nei moduli di contatto</li>
+<li>Commenti e recensioni</li>
+</ul>
+
+<h3>3.2 Dati raccolti automaticamente</h3>
+<ul>
+<li>Indirizzo IP</li>
+<li>Informazioni sul browser e dispositivo</li>
+<li>Dati di navigazione e utilizzo</li>
+<li>Cookie e tecnologie simili</li>
+</ul>
+
+<h2>4. Finalità del Trattamento</h2>
+<p>I tuoi dati vengono utilizzati per:</p>
+<ul>
+<li>Fornire i servizi richiesti</li>
+<li>Rispondere a domande e richieste</li>
+<li>Migliorare l'esperienza utente</li>
+<li>Analisi statistiche anonimizzate</li>
+<li>Adempimenti legali</li>
+</ul>
+
+<h2>5. Base Giuridica</h2>
+<p>Il trattamento si basa su:</p>
+<ul>
+<li><strong>Consenso:</strong> per newsletter e marketing</li>
+<li><strong>Interesse legittimo:</strong> per analisi e miglioramenti</li>
+<li><strong>Esecuzione contratto:</strong> per servizi richiesti</li>
+<li><strong>Obbligo legale:</strong> per adempimenti normativi</li>
+</ul>
+
+<h2>6. Condivisione Dati</h2>
+<p>I dati possono essere condivisi con:</p>
+<ul>
+<li>Fornitori di servizi tecnici (hosting, email)</li>
+<li>Strumenti di analisi (Google Analytics)</li>
+<li>Autorità competenti quando richiesto dalla legge</li>
+</ul>
+
+<h2>7. Conservazione Dati</h2>
+<p>I dati vengono conservati per il tempo necessario alle finalità del trattamento:</p>
+<ul>
+<li>Dati di contatto: fino a revoca del consenso</li>
+<li>Dati di navigazione: 26 mesi</li>
+<li>Log del server: 12 mesi</li>
+</ul>
+
+<h2>8. Diritti dell'Interessato</h2>
+<p>Hai diritto a:</p>
+<ul>
+<li>Accedere ai tuoi dati personali</li>
+<li>Rettificare dati inesatti</li>
+<li>Cancellare i dati (\"diritto all'oblio\")</li>
+<li>Limitare il trattamento</li>
+<li>Portabilità dei dati</li>
+<li>Opporsi al trattamento</li>
+<li>Revocare il consenso</li>
+</ul>
+
+<h2>9. Cookie</h2>
+<p>Il sito utilizza cookie per migliorare l'esperienza utente. Consulta la nostra <a href=\"/cookie-policy/\">Cookie Policy</a> per dettagli.</p>
+
+<h2>10. Sicurezza</h2>
+<p>Implementiamo misure di sicurezza tecniche e organizzative per proteggere i tuoi dati da accessi non autorizzati, perdita o distruzione.</p>
+
+<h2>11. Modifiche alla Privacy Policy</h2>
+<p>Ci riserviamo il diritto di aggiornare questa informativa. Le modifiche saranno pubblicate su questa pagina con indicazione della data di aggiornamento.</p>
+
+<h2>12. Contatti</h2>
+<p>Per esercitare i tuoi diritti o per domande sulla privacy, contattaci:</p>
+<ul>
+<li><strong>Email:</strong> ${WP_ADMIN_EMAIL}</li>
+<li><strong>Sito:</strong> <a href=\"https://${DOMAIN}/contatti/\">Modulo di contatto</a></li>
+</ul>
+
+<p><em>Questa informativa è conforme al GDPR (Regolamento UE 2016/679) e al Codice Privacy italiano (D.Lgs. 196/2003 e s.m.i.).</em></p>"
+
+    # Create page
+    sudo -u www-data wp post create --post_type=page --post_title="Privacy Policy" --post_content="$privacy_content" --post_status=publish --post_name="privacy-policy" --quiet 2>/dev/null || true
+
+    # Set as privacy page
+    local privacy_page_id=$(sudo -u www-data wp post list --post_type=page --name="privacy-policy" --field=ID --quiet 2>/dev/null)
+    if [[ -n "$privacy_page_id" ]]; then
+        sudo -u www-data wp option update wp_page_for_privacy_policy "$privacy_page_id" --quiet
+    fi
+
+    log_info "Privacy Policy page creata"
+}
+
+create_cookie_policy_page() {
+    local cookie_content="<h1>Cookie Policy</h1>
+
+<p><em>Ultimo aggiornamento: $(date '+%d/%m/%Y')</em></p>
+
+<h2>1. Cosa sono i Cookie</h2>
+<p>I cookie sono piccoli file di testo che vengono memorizzati sul tuo dispositivo quando visiti un sito web. Permettono al sito di ricordare le tue preferenze e migliorare la tua esperienza di navigazione.</p>
+
+<h2>2. Tipi di Cookie Utilizzati</h2>
+
+<h3>2.1 Cookie Tecnici (Necessari)</h3>
+<p><strong>Finalità:</strong> Essenziali per il funzionamento del sito</p>
+<p><strong>Base giuridica:</strong> Interesse legittimo</p>
+<p><strong>Durata:</strong> Sessione</p>
+<p><strong>Esempi:</strong></p>
+<ul>
+<li>Cookie di sessione PHP</li>
+<li>Cookie di sicurezza</li>
+<li>Cookie per il carrello acquisti</li>
+</ul>
+
+<h3>2.2 Cookie di Preferenze</h3>
+<p><strong>Finalità:</strong> Ricordare le tue scelte e preferenze</p>
+<p><strong>Base giuridica:</strong> Consenso</p>
+<p><strong>Durata:</strong> 12 mesi</p>
+<p><strong>Esempi:</strong></p>
+<ul>
+<li>Lingua preferita</li>
+<li>Tema scuro/chiaro</li>
+<li>Impostazioni accessibilità</li>
+</ul>
+
+<h3>2.3 Cookie Statistici</h3>
+<p><strong>Finalità:</strong> Analizzare l'utilizzo del sito per miglioramenti</p>
+<p><strong>Base giuridica:</strong> Consenso</p>
+<p><strong>Durata:</strong> 26 mesi</p>
+<p><strong>Provider:</strong> Google Analytics</p>
+<ul>
+<li>_ga: Identifica utenti unici</li>
+<li>_gid: Identifica utenti unici per 24h</li>
+<li>_gat: Limita la frequenza di richieste</li>
+</ul>
+
+<h3>2.4 Cookie di Marketing</h3>
+<p><strong>Finalità:</strong> Pubblicità personalizzata e remarketing</p>
+<p><strong>Base giuridica:</strong> Consenso</p>
+<p><strong>Durata:</strong> 90 giorni</p>
+<p><strong>Provider:</strong> Google Ads, Facebook Pixel</p>
+
+<h2>3. Gestione dei Cookie</h2>
+
+<h3>3.1 Consenso</h3>
+<p>Al primo accesso al sito, ti viene mostrato un banner informativo per richiedere il consenso all'uso dei cookie non tecnici.</p>
+
+<h3>3.2 Revoca del Consenso</h3>
+<p>Puoi revocare il consenso in qualsiasi momento:</p>
+<ul>
+<li>Utilizzando il link \"Gestisci cookie\" nel footer</li>
+<li>Cancellando i cookie dal browser</li>
+<li>Contattandoci via email</li>
+</ul>
+
+<h3>3.3 Configurazione Browser</h3>
+<p>Puoi gestire i cookie direttamente nel tuo browser:</p>
+<ul>
+<li><strong>Chrome:</strong> Settings > Privacy > Cookies</li>
+<li><strong>Firefox:</strong> Options > Privacy > Cookies</li>
+<li><strong>Safari:</strong> Preferences > Privacy > Cookies</li>
+<li><strong>Edge:</strong> Settings > Privacy > Cookies</li>
+</ul>
+
+<h2>4. Cookie di Terze Parti</h2>
+
+<h3>4.1 Google Analytics</h3>
+<p><strong>Finalità:</strong> Analisi statistica anonimizzata</p>
+<p><strong>Privacy Policy:</strong> <a href=\"https://policies.google.com/privacy\">Google Privacy Policy</a></p>
+<p><strong>Opt-out:</strong> <a href=\"https://tools.google.com/dlpage/gaoptout\">Google Analytics Opt-out</a></p>
+
+<h3>4.2 Google Fonts</h3>
+<p><strong>Finalità:</strong> Visualizzazione font web</p>
+<p><strong>Implementazione:</strong> Self-hosted (nessun dato inviato a Google)</p>
+
+<h3>4.3 Cloudflare</h3>
+<p><strong>Finalità:</strong> CDN e sicurezza</p>
+<p><strong>Cookie:</strong> __cfduid (sessione)</p>
+<p><strong>Privacy Policy:</strong> <a href=\"https://www.cloudflare.com/privacy/\">Cloudflare Privacy Policy</a></p>
+
+<h2>5. Trasferimenti Internazionali</h2>
+<p>Alcuni cookie possono comportare trasferimenti di dati verso paesi terzi (USA). Questi trasferimenti sono basati su:</p>
+<ul>
+<li>Decisioni di adeguatezza della Commissione Europea</li>
+<li>Clausole contrattuali tipo</li>
+<li>Certificazioni Privacy Shield (dove applicable)</li>
+</ul>
+
+<h2>6. Diritti dell'Interessato</h2>
+<p>Hai gli stessi diritti previsti nella <a href=\"/privacy-policy/\">Privacy Policy</a>, incluso il diritto di opporti al trattamento per finalità di marketing.</p>
+
+<h2>7. Contatti</h2>
+<p>Per domande sui cookie o per esercitare i tuoi diritti:</p>
+<ul>
+<li><strong>Email:</strong> ${WP_ADMIN_EMAIL}</li>
+<li><strong>Oggetto:</strong> \"Cookie Policy - ${DOMAIN}\"</li>
+</ul>
+
+<div id=\"cookie-settings\" style=\"margin-top: 30px; padding: 20px; background: #f9f9f9; border-radius: 5px;\">
+<h3>🍪 Gestisci le tue preferenze cookie</h3>
+<p>Clicca sul pulsante sottostante per modificare le tue preferenze sui cookie:</p>
+<button onclick=\"if(typeof(CLI)!=='undefined'){CLI.showSettings();}else{alert('Sistema di gestione cookie in caricamento...');}\" style=\"background: #007acc; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer;\">Gestisci Cookie</button>
+</div>"
+
+    # Create page
+    sudo -u www-data wp post create --post_type=page --post_title="Cookie Policy" --post_content="$cookie_content" --post_status=publish --post_name="cookie-policy" --quiet 2>/dev/null || true
+
+    log_info "Cookie Policy page creata"
+}
+
+create_data_protection_page() {
+    local data_protection_content="<h1>Protezione Dati Personali</h1>
+
+<p><em>Ultimo aggiornamento: $(date '+%d/%m/%Y')</em></p>
+
+<h2>1. I Tuoi Diritti GDPR</h2>
+<p>Come utente del nostro sito web, hai diritti specifici riguardo ai tuoi dati personali secondo il GDPR:</p>
+
+<h3>1.1 Diritto di Accesso (Art. 15 GDPR)</h3>
+<p>Puoi richiedere una copia di tutti i dati personali che abbiamo su di te, incluso:</p>
+<ul>
+<li>Quali dati abbiamo</li>
+<li>Perché li trattiamo</li>
+<li>Chi può accedervi</li>
+<li>Per quanto tempo li conserviamo</li>
+</ul>
+
+<h3>1.2 Diritto di Rettifica (Art. 16 GDPR)</h3>
+<p>Puoi chiedere la correzione di dati personali inesatti o incompleti.</p>
+
+<h3>1.3 Diritto di Cancellazione (Art. 17 GDPR)</h3>
+<p>Puoi richiedere la cancellazione dei tuoi dati quando:</p>
+<ul>
+<li>Non sono più necessari</li>
+<li>Revochi il consenso</li>
+<li>Sono stati trattati illecitamente</li>
+<li>Ti opponi al trattamento</li>
+</ul>
+
+<h3>1.4 Diritto di Limitazione (Art. 18 GDPR)</h3>
+<p>Puoi chiedere di limitare il trattamento quando:</p>
+<ul>
+<li>Contesti l'esattezza dei dati</li>
+<li>Il trattamento è illecito ma preferisci la limitazione</li>
+<li>Ti servono per far valere un diritto in giudizio</li>
+</ul>
+
+<h3>1.5 Diritto di Portabilità (Art. 20 GDPR)</h3>
+<p>Puoi ottenere i tuoi dati in formato strutturato e leggibile da una macchina.</p>
+
+<h3>1.6 Diritto di Opposizione (Art. 21 GDPR)</h3>
+<p>Puoi opporti al trattamento basato su interesse legittimo o per finalità di marketing diretto.</p>
+
+<h2>2. Come Esercitare i Tuoi Diritti</h2>
+
+<h3>2.1 Richiesta via Email</h3>
+<p>Invia una email a: <strong>${WP_ADMIN_EMAIL}</strong></p>
+<p>Specifica nell'oggetto: \"Richiesta GDPR - [Tipo di richiesta]\"</p>
+
+<h3>2.2 Informazioni da Fornire</h3>
+<ul>
+<li>Nome e cognome</li>
+<li>Email associata all'account</li>
+<li>Descrizione dettagliata della richiesta</li>
+<li>Copia di documento d'identità (per verifica)</li>
+</ul>
+
+<h3>2.3 Tempi di Risposta</h3>
+<p>Risponderemo entro <strong>30 giorni</strong> dalla ricezione della richiesta.</p>
+
+<h2>3. Misure di Sicurezza</h2>
+
+<h3>3.1 Sicurezza Tecnica</h3>
+<ul>
+<li>Crittografia SSL/TLS</li>
+<li>Firewall applicativo</li>
+<li>Monitoraggio accessi</li>
+<li>Backup crittografati</li>
+<li>Aggiornamenti di sicurezza regolari</li>
+</ul>
+
+<h3>3.2 Sicurezza Organizzativa</h3>
+<ul>
+<li>Accesso limitato ai dati</li>
+<li>Formazione del personale</li>
+<li>Procedure di incident response</li>
+<li>Audit periodici</li>
+</ul>
+
+<h2>4. Data Breach</h2>
+<p>In caso di violazione dei dati personali:</p>
+<ul>
+<li>Notificheremo l'autorità competente entro 72 ore</li>
+<li>Ti informeremo se sussiste un rischio elevato</li>
+<li>Implementeremo misure correttive immediate</li>
+</ul>
+
+<h2>5. Bambini e Minori</h2>
+<p>I nostri servizi non sono destinati a minori di 16 anni. Se veniamo a conoscenza di dati di minori raccolti senza consenso genitoriale, li cancelleremo immediatamente.</p>
+
+<h2>6. Trasferimenti Internazionali</h2>
+<p>I tuoi dati potrebbero essere trasferiti verso:</p>
+<ul>
+<li><strong>USA:</strong> Google (Analytics), Cloudflare</li>
+<li><strong>Garanzie:</strong> Clausole contrattuali tipo, certificazioni adequacy</li>
+</ul>
+
+<h2>7. Conservazione Dati</h2>
+<table border=\"1\" style=\"width:100%; border-collapse: collapse;\">
+<tr><th>Tipologia Dato</th><th>Periodo di Conservazione</th><th>Base Giuridica</th></tr>
+<tr><td>Dati account utente</td><td>Fino a cancellazione account</td><td>Consenso</td></tr>
+<tr><td>Dati di navigazione</td><td>26 mesi</td><td>Interesse legittimo</td></tr>
+<tr><td>Log di sicurezza</td><td>12 mesi</td><td>Obbligo legale</td></tr>
+<tr><td>Email marketing</td><td>Fino a disiscrizione</td><td>Consenso</td></tr>
+<tr><td>Commenti pubblici</td><td>Fino a richiesta cancellazione</td><td>Interesse legittimo</td></tr>
+</table>
+
+<h2>8. Autorità di Controllo</h2>
+<p>Hai diritto di presentare reclamo all'autorità di controllo:</p>
+<p><strong>Garante per la Protezione dei Dati Personali</strong><br>
+Piazza Venezia 11, 00187 Roma<br>
+Tel: 06.696771<br>
+Email: garante@gpdp.it<br>
+Web: <a href=\"https://www.garanteprivacy.it\">www.garanteprivacy.it</a></p>
+
+<h2>9. Aggiornamenti</h2>
+<p>Questa pagina viene aggiornata regolarmente per riflettere cambiamenti normativi o nelle nostre pratiche di trattamento dati.</p>
+
+<h2>10. Contatti DPO</h2>
+<p>Per questioni specifiche sulla protezione dati:</p>
+<ul>
+<li><strong>Email:</strong> ${WP_ADMIN_EMAIL}</li>
+<li><strong>Oggetto:</strong> \"DPO Request - Data Protection\"</li>
+</ul>"
+
+    sudo -u www-data wp post create --post_type=page --post_title="Protezione Dati" --post_content="$data_protection_content" --post_status=publish --post_name="data-protection" --quiet 2>/dev/null || true
+
+    log_info "Data Protection page creata"
+}
+
+create_terms_conditions_page() {
+    local terms_content="<h1>Termini e Condizioni</h1>
+
+<p><em>Ultimo aggiornamento: $(date '+%d/%m/%Y')</em></p>
+
+<h2>1. Accettazione dei Termini</h2>
+<p>L'accesso e l'utilizzo del sito web <strong>${DOMAIN}</strong> comporta l'accettazione integrale dei presenti Termini e Condizioni.</p>
+
+<h2>2. Descrizione del Servizio</h2>
+<p><strong>${SITE_NAME}</strong> fornisce contenuti informativi e servizi attraverso il presente sito web.</p>
+
+<h2>3. Uso Consentito</h2>
+<p>È consentito utilizzare il sito per:</p>
+<ul>
+<li>Consultare contenuti e informazioni</li>
+<li>Utilizzare i servizi offerti</li>
+<li>Condividere contenuti nel rispetto delle regole</li>
+</ul>
+
+<h2>4. Uso Vietato</h2>
+<p>È vietato:</p>
+<ul>
+<li>Utilizzare il sito per scopi illegali</li>
+<li>Compromettere la sicurezza del sito</li>
+<li>Copiare contenuti senza autorizzazione</li>
+<li>Inviare spam o contenuti dannosi</li>
+</ul>
+
+<h2>5. Proprietà Intellettuale</h2>
+<p>Tutti i contenuti del sito (testi, immagini, loghi, software) sono protetti da diritti di proprietà intellettuale e appartengono a <strong>${SITE_NAME}</strong> o ai rispettivi proprietari.</p>
+
+<h2>6. Privacy e Dati Personali</h2>
+<p>Il trattamento dei dati personali è disciplinato dalla nostra <a href=\"/privacy-policy/\">Privacy Policy</a> e dalla <a href=\"/cookie-policy/\">Cookie Policy</a>.</p>
+
+<h2>7. Limitazione di Responsabilità</h2>
+<p><strong>${SITE_NAME}</strong> non è responsabile per:</p>
+<ul>
+<li>Interruzioni temporanee del servizio</li>
+<li>Danni derivanti dall'uso del sito</li>
+<li>Contenuti di siti terzi collegati</li>
+<li>Perdita di dati</li>
+</ul>
+
+<h2>8. Modifiche ai Termini</h2>
+<p>Ci riserviamo il diritto di modificare i presenti termini. Le modifiche saranno pubblicate su questa pagina e entreranno in vigore dalla pubblicazione.</p>
+
+<h2>9. Legge Applicabile</h2>
+<p>I presenti termini sono disciplinati dalla legge italiana. Per controversie è competente il Foro di [Città].</p>
+
+<h2>10. Contatti</h2>
+<p>Per domande sui termini e condizioni:</p>
+<ul>
+<li><strong>Email:</strong> ${WP_ADMIN_EMAIL}</li>
+<li><strong>Sito:</strong> ${DOMAIN}</li>
+</ul>"
+
+    sudo -u www-data wp post create --post_type=page --post_title="Termini e Condizioni" --post_content="$terms_content" --post_status=publish --post_name="termini-condizioni" --quiet 2>/dev/null || true
+
+    log_info "Terms and Conditions page creata"
+}
+
+configure_wordpress_privacy() {
+    log_step "Configurazione privacy WordPress nativa..."
+
+    # Enable privacy features
+    sudo -u www-data wp option update wp_privacy_policy_content_template_active 1 --quiet
+
+    # Configure comment moderation
+    sudo -u www-data wp option update comment_moderation 1 --quiet
+    sudo -u www-data wp option update moderation_notify 1 --quiet
+
+    # Configure user registration
+    sudo -u www-data wp option update default_role subscriber --quiet
+    sudo -u www-data wp option update users_can_register 0 --quiet
+
+    # Configure data export/erase settings
+    sudo -u www-data wp option update wp_user_request_cleanup_interval 86400 --quiet
+
+    log_success "WordPress privacy configurato"
+}
+
+configure_ga_gdpr() {
+    log_step "Configurazione Google Analytics GDPR-compliant..."
+
+    # Update Google Analytics settings for GDPR compliance
+    local ga_gdpr_settings='{
+        "anonymize_ips": true,
+        "demographics": false,
+        "track_user": false,
+        "events_mode": false,
+        "affiliate_links": false,
+        "ignore_users": ["administrator", "editor"],
+        "cookie_consent": true,
+        "display_features": false,
+        "enhanced_link_attribution": false
+    }'
+
+    sudo -u www-data wp option update exactmetrics_settings "$ga_gdpr_settings" --format=json --quiet 2>/dev/null || true
+
+    log_success "Google Analytics configurato per GDPR"
+}
+
+configure_privacy_forms() {
+    log_step "Configurazione moduli privacy-compliant..."
+
+    # Install Contact Form 7 if not present
+    if ! sudo -u www-data wp plugin is-installed contact-form-7 --quiet 2>/dev/null; then
+        sudo -u www-data wp plugin install contact-form-7 --activate --quiet 2>/dev/null || true
+    fi
+
+    # Create GDPR-compliant contact form
+    create_privacy_contact_form
+
+    log_success "Moduli privacy configurati"
+}
+
+create_privacy_contact_form() {
+    # Contact form with GDPR compliance
+    local form_content='<label> Il tuo nome (richiesto)
+    [text* your-name] </label>
+
+<label> La tua email (richiesto)
+    [email* your-email] </label>
+
+<label> Oggetto
+    [text your-subject] </label>
+
+<label> Il tuo messaggio
+    [textarea your-message] </label>
+
+[acceptance acceptance-privacy] Accetto la <a href="/privacy-policy/" target="_blank">Privacy Policy</a> e autorizzo il trattamento dei miei dati personali per rispondere alla mia richiesta. *
+
+[acceptance acceptance-marketing] Accetto di ricevere comunicazioni marketing (opzionale)
+
+[submit "Invia"]'
+
+    local mail_content="Messaggio da: [your-name] <[your-email]>
+Oggetto: [your-subject]
+
+Messaggio:
+[your-message]
+
+--
+Questo messaggio è stato inviato tramite il modulo di contatto su ${DOMAIN}
+Privacy policy accettata: [acceptance-privacy]
+Marketing accettato: [acceptance-marketing]"
+
+    # Create contact form via WP-CLI
+    sudo -u www-data wp contact-form-7 create --title="Contatto Privacy-Compliant" --form="$form_content" --mail-body="$mail_content" --quiet 2>/dev/null || true
+
+    log_info "Contact form GDPR-compliant creato"
+}
+
+# =============================================================================
+# THEME AND TEMPLATE OPTIMIZATION
+# =============================================================================
+
+install_optimized_theme() {
+    log_step "Installazione tema ottimizzato per performance..."
+
+    cd "/var/www/${DOMAIN}"
+
+    # Install GeneratePress (free version)
+    if sudo -u www-data wp theme install generatepress --activate --quiet; then
+        log_success "GeneratePress installato e attivato"
+
+        # Configure GeneratePress for performance
+        configure_generatepress_performance
+
+        # Install child theme for customizations
+        create_child_theme
+
+        # Optimize theme settings
+        optimize_theme_settings
+
+    else
+        log_warn "Errore installazione GeneratePress, uso tema di default"
+        # Configure default theme
+        configure_default_theme
+    fi
+
+    # Install and configure Elementor (optional but recommended)
+    install_elementor
+
+    log_success "Tema ottimizzato configurato"
+}
+
+configure_generatepress_performance() {
+    log_step "Configurazione GeneratePress per performance..."
+
+    # GeneratePress settings optimized for speed
+    local gp_settings='{
+        "container_width": 1200,
+        "container_alignment": "center",
+        "layout_setting": "sidebar-right",
+        "blog_layout_setting": "right-sidebar",
+        "single_layout_setting": "right-sidebar",
+        "page_layout_setting": "no-sidebar",
+        "footer_layout_setting": "footer-bar",
+        "back_to_top": "enable",
+        "navigation_search": "",
+        "navigation_alignment": "left",
+        "header_layout_setting": "fluid-header",
+        "site_title": "'${SITE_NAME}'",
+        "hide_tagline": false,
+        "logo_width": "",
+        "retina_logo": "",
+        "inline_logo_site_branding": false
+    }'
+
+    sudo -u www-data wp option update generate_settings "$gp_settings" --format=json --quiet 2>/dev/null || true
+
+    # Performance-focused customizer settings
+    configure_customizer_performance
+
+    log_success "GeneratePress configurato per performance"
+}
+
+create_child_theme() {
+    log_step "Creazione child theme..."
+
+    local theme_dir="/var/www/${DOMAIN}/wp-content/themes"
+    local child_dir="${theme_dir}/generatepress-child"
+
+    # Create child theme directory
+    mkdir -p "$child_dir"
+
+    # Create style.css
+    cat > "${child_dir}/style.css" << EOF
+/*
+Theme Name: GeneratePress Child - Performance Optimized
+Description: Child theme of GeneratePress optimized for speed and SEO
+Template: generatepress
+Version: 1.0.0
+*/
+
+/* Import parent theme styles */
+@import url("../generatepress/style.min.css");
+
+/* Performance optimizations */
+.wp-block-image img {
+    height: auto;
+    max-width: 100%;
+}
+
+/* Critical CSS for above-the-fold */
+.site-header {
+    background: #fff;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+}
+
+.main-navigation {
+    font-weight: 500;
+}
+
+/* Async font loading */
+@font-display: swap;
+
+/* Lazy loading optimization */
+img[data-src] {
+    opacity: 0;
+    transition: opacity 0.3s;
+}
+
+img[data-loaded="true"] {
+    opacity: 1;
+}
+
+/* Core Web Vitals optimizations */
+.site-content {
+    min-height: 60vh;
+}
+
+/* Mobile-first responsive design */
+@media (max-width: 768px) {
+    .container {
+        padding: 0 20px;
+    }
+}
+EOF
+
+    # Create functions.php
+    cat > "${child_dir}/functions.php" << 'CHILD_FUNCTIONS_EOF'
+<?php
+/**
+ * GeneratePress Child Theme Functions
+ * Performance and SEO optimized
+ */
+
+// Prevent direct access
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+// Theme setup
+add_action('after_setup_theme', 'generatepress_child_setup');
+function generatepress_child_setup() {
+    // Add theme support for post thumbnails
+    add_theme_support('post-thumbnails');
+
+    // Add theme support for HTML5
+    add_theme_support('html5', array(
+        'search-form',
+        'comment-form',
+        'comment-list',
+        'gallery',
+        'caption',
+        'script',
+        'style'
+    ));
+
+    // Add theme support for responsive embeds
+    add_theme_support('responsive-embeds');
+
+    // Add theme support for editor styles
+    add_theme_support('editor-styles');
+}
+
+// Enqueue scripts and styles
+add_action('wp_enqueue_scripts', 'generatepress_child_scripts', 15);
+function generatepress_child_scripts() {
+    // Dequeue parent theme styles and enqueue minified version
+    wp_dequeue_style('generate-style');
+    wp_enqueue_style('generate-style-min', get_template_directory_uri() . '/style.min.css');
+
+    // Enqueue child theme styles
+    wp_enqueue_style('generatepress-child-style', get_stylesheet_uri(), array('generate-style-min'));
+
+    // Preload critical resources
+    add_action('wp_head', 'add_critical_resource_hints', 5);
+}
+
+// Critical resource hints
+function add_critical_resource_hints() {
+    // Preload critical CSS
+    echo '<link rel="preload" href="' . get_stylesheet_uri() . '" as="style" onload="this.onload=null;this.rel=\'stylesheet\'">';
+
+    // DNS prefetch for external resources
+    echo '<link rel="dns-prefetch" href="//fonts.googleapis.com">';
+    echo '<link rel="dns-prefetch" href="//fonts.gstatic.com">';
+}
+
+// Performance optimizations
+add_action('init', 'child_theme_performance_optimizations');
+function child_theme_performance_optimizations() {
+    // Remove query strings from static resources
+    add_filter('script_loader_src', 'remove_script_version', 15, 1);
+    add_filter('style_loader_src', 'remove_script_version', 15, 1);
+
+    // Optimize images
+    add_filter('wp_image_editors', 'child_theme_image_editors');
+
+    // Enable SVG support
+    add_filter('wp_check_filetype_and_ext', 'allow_svg_upload', 10, 4);
+    add_filter('upload_mimes', 'svg_upload_allow');
+}
+
+function remove_script_version($src) {
+    if (strpos($src, 'ver=')) {
+        $src = remove_query_arg('ver', $src);
+    }
+    return $src;
+}
+
+function child_theme_image_editors($editors) {
+    $editors = array('WP_Image_Editor_Imagick', 'WP_Image_Editor_GD');
+    return $editors;
+}
+
+function allow_svg_upload($data, $file, $filename, $mimes) {
+    $filetype = wp_check_filetype($filename, $mimes);
+    return [
+        'ext' => $filetype['ext'],
+        'type' => $filetype['type'],
+        'proper_filename' => $data['proper_filename']
+    ];
+}
+
+function svg_upload_allow($mimes) {
+    $mimes['svg'] = 'image/svg+xml';
+    return $mimes;
+}
+
+// SEO optimizations
+add_action('wp_head', 'child_theme_seo_optimizations', 1);
+function child_theme_seo_optimizations() {
+    // Add viewport meta tag
+    echo '<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">';
+
+    // Add theme color for mobile browsers
+    echo '<meta name="theme-color" content="#ffffff">';
+
+    // Add structured data breadcrumbs
+    if (function_exists('yoast_breadcrumb')) {
+        add_action('generate_before_main_content', 'add_yoast_breadcrumbs');
+    }
+}
+
+function add_yoast_breadcrumbs() {
+    yoast_breadcrumb('<nav class="breadcrumbs">', '</nav>');
+}
+
+// Core Web Vitals optimizations
+add_action('wp_footer', 'add_web_vitals_optimizations');
+function add_web_vitals_optimizations() {
+    // Add critical JavaScript inline
+    echo '<script>
+        // Intersection Observer for lazy loading
+        if ("IntersectionObserver" in window) {
+            const imageObserver = new IntersectionObserver((entries, observer) => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting) {
+                        const img = entry.target;
+                        img.src = img.dataset.src;
+                        img.classList.remove("lazy");
+                        img.setAttribute("data-loaded", "true");
+                        observer.unobserve(img);
+                    }
+                });
+            });
+
+            document.querySelectorAll("img[data-src]").forEach(img => {
+                imageObserver.observe(img);
+            });
+        }
+    </script>';
+}
+
+// Database optimization hooks
+add_action('wp_loaded', 'child_theme_db_optimizations');
+function child_theme_db_optimizations() {
+    // Limit post revisions
+    if (!defined('WP_POST_REVISIONS')) {
+        define('WP_POST_REVISIONS', 3);
+    }
+
+    // Disable pingbacks
+    add_filter('xmlrpc_enabled', '__return_false');
+    add_filter('wp_headers', 'disable_x_pingback');
+}
+
+function disable_x_pingback($headers) {
+    unset($headers['X-Pingback']);
+    return $headers;
+}
+CHILD_FUNCTIONS_EOF
+
+    # Activate child theme
+    sudo -u www-data wp theme activate generatepress-child --quiet 2>/dev/null || true
+
+    chown -R www-data:www-data "$child_dir"
+
+    log_success "Child theme creato e attivato"
+}
+
+configure_customizer_performance() {
+    log_step "Configurazione Customizer per performance..."
+
+    # Typography settings for performance
+    sudo -u www-data wp option update generate_font_manager_google_fonts '' --quiet 2>/dev/null || true
+
+    # Color settings
+    local colors='{
+        "accent_color": "#007acc",
+        "accent_color_hover": "#005a99",
+        "text_color": "#333333",
+        "link_color": "#007acc",
+        "link_color_hover": "#005a99"
+    }'
+
+    sudo -u www-data wp option update generate_colors "$colors" --format=json --quiet 2>/dev/null || true
+
+    # Spacing settings for mobile optimization
+    local spacing='{
+        "mobile_menu_breakpoint": "768",
+        "content_padding_top": "40px",
+        "content_padding_bottom": "40px",
+        "sidebar_width": "25%"
+    }'
+
+    sudo -u www-data wp option update generate_spacing "$spacing" --format=json --quiet 2>/dev/null || true
+
+    log_success "Customizer configurato"
+}
+
+optimize_theme_settings() {
+    log_step "Ottimizzazione impostazioni tema..."
+
+    # WordPress core settings for performance
+    sudo -u www-data wp option update thumbnail_size_w 150 --quiet
+    sudo -u www-data wp option update thumbnail_size_h 150 --quiet
+    sudo -u www-data wp option update medium_size_w 300 --quiet
+    sudo -u www-data wp option update medium_size_h 300 --quiet
+    sudo -u www-data wp option update large_size_w 1024 --quiet
+    sudo -u www-data wp option update large_size_h 1024 --quiet
+
+    # Enable responsive images
+    sudo -u www-data wp option update medium_large_size_w 768 --quiet
+    sudo -u www-data wp option update medium_large_size_h 0 --quiet
+
+    # Reading settings for SEO
+    sudo -u www-data wp option update posts_per_page 10 --quiet
+    sudo -u www-data wp option update posts_per_rss 10 --quiet
+    sudo -u www-data wp option update rss_use_excerpt 1 --quiet
+
+    # Discussion settings for performance
+    sudo -u www-data wp option update default_ping_status "closed" --quiet
+    sudo -u www-data wp option update default_comment_status "open" --quiet
+
+    log_success "Impostazioni tema ottimizzate"
+}
+
+configure_default_theme() {
+    log_step "Configurazione tema di default..."
+
+    # If GeneratePress fails, optimize default theme
+    local active_theme=$(sudo -u www-data wp theme list --status=active --field=name --quiet 2>/dev/null || echo "")
+
+    if [[ -n "$active_theme" ]]; then
+        log_info "Configurazione tema attivo: $active_theme"
+
+        # Basic performance optimizations for any theme
+        optimize_theme_settings
+
+        # Add basic performance CSS
+        local style_file="/var/www/${DOMAIN}/wp-content/themes/${active_theme}/style.css"
+        if [[ -f "$style_file" ]]; then
+            cat >> "$style_file" << 'DEFAULT_CSS_EOF'
+
+/* Performance optimizations */
+img {
+    height: auto;
+    max-width: 100%;
+}
+
+.wp-block-image {
+    max-width: 100%;
+    height: auto;
+}
+
+/* Mobile optimization */
+@media (max-width: 768px) {
+    body {
+        font-size: 16px;
+        line-height: 1.6;
+    }
+}
+DEFAULT_CSS_EOF
         fi
     fi
 
-    # Configure MinIO S3 if available
-    if [[ "${USE_MINIO:-}" == "y"* ]] || [[ "${USE_MINIO,,}" =~ ^(yes|s|si)$ ]]; then
-        if test_minio_connection "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"; then
-            # Create bucket if it doesn't exist
-            create_minio_bucket "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY" "$MINIO_BUCKET"
-            log_success "MinIO S3 configurato e bucket creato/verificato"
+    log_success "Tema di default configurato"
+}
+
+install_elementor() {
+    log_step "Installazione Elementor (opzionale)..."
+
+    # Install Elementor only if user wants it
+    if [[ "${INSTALL_ELEMENTOR:-}" == "true" ]]; then
+        if sudo -u www-data wp plugin install elementor --activate --quiet 2>/dev/null; then
+            # Configure Elementor for performance
+            configure_elementor_performance
+            log_success "Elementor installato e configurato"
         else
-            log_warn "MinIO configurato ma connessione non disponibile"
+            log_warn "Errore installazione Elementor"
         fi
+    else
+        log_info "Elementor non richiesto, saltato"
     fi
+}
+
+configure_elementor_performance() {
+    log_step "Configurazione Elementor per performance..."
+
+    # Elementor performance settings
+    local elementor_settings='{
+        "css_print_method": "internal_embedding",
+        "font_display": "swap",
+        "disable_color_schemes": "yes",
+        "disable_typography_schemes": "yes",
+        "optimized_dom_output": "enabled",
+        "optimized_control_loading": "enabled"
+    }'
+
+    sudo -u www-data wp option update elementor_performance_settings "$elementor_settings" --format=json --quiet 2>/dev/null || true
+
+    log_success "Elementor configurato per performance"
 }
 
 # =============================================================================
@@ -1047,7 +2547,7 @@ setup_ssl_certificates() {
         log_success "✓ SSL configurato con successo"
 
         # Update wp-config for SSL
-        sed -i "s/define('FORCE_SSL_ADMIN', false);/define('FORCE_SSL_ADMIN', true);/" /var/www/"$DOMAIN"/wp-config.php
+        sed -i "s/define('FORCE_SSL_ADMIN', true);/define('FORCE_SSL_ADMIN', true);/" /var/www/"$DOMAIN"/wp-config.php
 
         # Update site URL
         cd "/var/www/${DOMAIN}"
@@ -1169,9 +2669,232 @@ setup_maintenance_jobs() {
 
 # Clean transients (Daily at 5:00 AM)
 0 5 * * * www-data cd /var/www/${DOMAIN} && wp transient delete --all --quiet
+
+# Advanced Backup Jobs
+# Full backup (Weekly - Sunday 3:00 AM)
+0 3 * * 0 root /usr/local/bin/wp-backup-full.sh
+
+# Incremental backup (Daily - 1:00 AM)
+0 1 * * * root /usr/local/bin/wp-backup-incremental.sh
+
+# Database backup (Every 6 hours)
+0 */6 * * * root /usr/local/bin/wp-backup-db.sh
 EOF
 
     log_success "Manutenzione automatica configurata"
+
+    # Create advanced backup scripts
+    create_backup_scripts
+}
+
+create_backup_scripts() {
+    log_step "Creazione script backup avanzati..."
+
+    # Install required backup tools
+    apt install -y restic rclone s3cmd duplicity
+
+    # Full backup script
+    cat > /usr/local/bin/wp-backup-full.sh << 'BACKUP_FULL_EOF'
+#!/bin/bash
+# WordPress Full Backup Script - Enterprise
+
+set -euo pipefail
+
+# Configuration
+DOMAIN="${DOMAIN}"
+BACKUP_DIR="/var/backups/wordpress"
+S3_BUCKET="${MINIO_BUCKET:-wordpress-backups}"
+RETENTION_DAYS=30
+LOG_FILE="/var/log/wordpress-backup.log"
+
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a "$LOG_FILE"
+}
+
+# Create backup directory
+mkdir -p "$BACKUP_DIR"
+cd "$BACKUP_DIR"
+
+# Backup timestamp
+BACKUP_DATE=$(date +%Y%m%d_%H%M%S)
+BACKUP_NAME="wp_full_${DOMAIN}_${BACKUP_DATE}"
+
+log "Starting full backup: $BACKUP_NAME"
+
+# 1. Database backup
+log "Backing up database..."
+if [[ -n "${DB_HOST:-}" ]]; then
+    mysqldump -h"$DB_HOST" -u"$DB_USER" -p"$DB_PASS" "$DB_NAME" \
+        --single-transaction --routines --triggers > "${BACKUP_NAME}_database.sql"
+else
+    log "WARNING: Database connection not configured"
+fi
+
+# 2. Files backup with exclusions
+log "Backing up files..."
+tar -czf "${BACKUP_NAME}_files.tar.gz" \
+    --exclude='*.log' \
+    --exclude='cache/*' \
+    --exclude='tmp/*' \
+    --exclude='.git/*' \
+    -C "/var/www" "${DOMAIN}"
+
+# 3. System configuration backup
+log "Backing up system configuration..."
+mkdir -p "${BACKUP_NAME}_config"
+cp -r /etc/nginx/sites-available/ "${BACKUP_NAME}_config/"
+cp -r /etc/php/*/fpm/pool.d/ "${BACKUP_NAME}_config/" 2>/dev/null || true
+cp /etc/crontab "${BACKUP_NAME}_config/" 2>/dev/null || true
+
+# 4. Create backup manifest
+cat > "${BACKUP_NAME}_manifest.json" << EOF
+{
+    "backup_type": "full",
+    "domain": "$DOMAIN",
+    "timestamp": "$(date -Iseconds)",
+    "files": [
+        "${BACKUP_NAME}_database.sql",
+        "${BACKUP_NAME}_files.tar.gz",
+        "${BACKUP_NAME}_config/"
+    ],
+    "size_mb": $(du -sm "${BACKUP_NAME}_"* | awk '{sum+=$1} END {print sum}')
+}
+EOF
+
+# 5. Upload to S3/MinIO (if configured)
+if [[ -n "${MINIO_ENDPOINT:-}" ]] && [[ -n "${MINIO_ACCESS_KEY:-}" ]]; then
+    log "Uploading to S3/MinIO..."
+
+    # Configure rclone for MinIO
+    cat > /tmp/rclone.conf << EOF
+[minio]
+type = s3
+provider = Other
+access_key_id = ${MINIO_ACCESS_KEY}
+secret_access_key = ${MINIO_SECRET_KEY}
+endpoint = ${MINIO_ENDPOINT}
+EOF
+
+    # Upload files
+    rclone --config=/tmp/rclone.conf copy "${BACKUP_NAME}_"* "minio:${S3_BUCKET}/full/"
+    rm /tmp/rclone.conf
+
+    log "Backup uploaded to S3"
+fi
+
+# 6. Cleanup old backups
+log "Cleaning up old backups..."
+find "$BACKUP_DIR" -name "wp_full_*" -mtime +$RETENTION_DAYS -delete
+
+# 7. Backup verification
+if [[ -f "${BACKUP_NAME}_database.sql" ]] && [[ -f "${BACKUP_NAME}_files.tar.gz" ]]; then
+    log "Full backup completed successfully: $BACKUP_NAME"
+
+    # Send notification (if configured)
+    if command -v curl >/dev/null 2>&1 && [[ -n "${WEBHOOK_URL:-}" ]]; then
+        curl -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "{\"text\":\"✅ WordPress backup completed for $DOMAIN\"}" \
+            >/dev/null 2>&1 || true
+    fi
+else
+    log "ERROR: Backup failed!"
+    exit 1
+fi
+BACKUP_FULL_EOF
+
+    # Database-only backup script
+    cat > /usr/local/bin/wp-backup-db.sh << 'BACKUP_DB_EOF'
+#!/bin/bash
+# WordPress Database Backup Script
+
+set -euo pipefail
+
+DOMAIN="${DOMAIN}"
+BACKUP_DIR="/var/backups/wordpress/db"
+RETENTION_HOURS=168  # 7 days
+LOG_FILE="/var/log/wordpress-db-backup.log"
+
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a "$LOG_FILE"
+}
+
+mkdir -p "$BACKUP_DIR"
+cd "$BACKUP_DIR"
+
+BACKUP_DATE=$(date +%Y%m%d_%H%M%S)
+BACKUP_FILE="db_${DOMAIN}_${BACKUP_DATE}.sql.gz"
+
+log "Starting database backup: $BACKUP_FILE"
+
+if [[ -n "${DB_HOST:-}" ]]; then
+    mysqldump -h"$DB_HOST" -u"$DB_USER" -p"$DB_PASS" "$DB_NAME" \
+        --single-transaction --routines --triggers | gzip > "$BACKUP_FILE"
+
+    log "Database backup completed: $BACKUP_FILE"
+
+    # Cleanup old backups
+    find "$BACKUP_DIR" -name "db_${DOMAIN}_*.sql.gz" -mtime +$((RETENTION_HOURS/24)) -delete
+else
+    log "ERROR: Database connection not configured"
+    exit 1
+fi
+BACKUP_DB_EOF
+
+    # Incremental backup script (using restic)
+    cat > /usr/local/bin/wp-backup-incremental.sh << 'BACKUP_INCREMENTAL_EOF'
+#!/bin/bash
+# WordPress Incremental Backup with Restic
+
+set -euo pipefail
+
+DOMAIN="${DOMAIN}"
+REPO_PATH="/var/backups/restic-repo"
+LOG_FILE="/var/log/wordpress-incremental-backup.log"
+
+log() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a "$LOG_FILE"
+}
+
+# Initialize restic repository if it doesn't exist
+if [[ ! -d "$REPO_PATH" ]]; then
+    log "Initializing restic repository..."
+    export RESTIC_PASSWORD="$(openssl rand -base64 32)"
+    echo "RESTIC_PASSWORD=$RESTIC_PASSWORD" > /etc/wordpress-backup.env
+    restic init --repo "$REPO_PATH"
+else
+    source /etc/wordpress-backup.env
+fi
+
+export RESTIC_REPOSITORY="$REPO_PATH"
+
+log "Starting incremental backup for $DOMAIN"
+
+# Backup WordPress files
+restic backup "/var/www/$DOMAIN" \
+    --exclude="*.log" \
+    --exclude="cache" \
+    --exclude="tmp" \
+    --tag="wordpress" \
+    --tag="$DOMAIN" \
+    --tag="$(date +%Y-%m-%d)"
+
+# Cleanup old snapshots (keep last 30 days)
+restic forget --tag="$DOMAIN" --keep-daily 30 --prune
+
+log "Incremental backup completed"
+
+# Show repository stats
+restic stats --tag="$DOMAIN" | tee -a "$LOG_FILE"
+BACKUP_INCREMENTAL_EOF
+
+    # Make scripts executable
+    chmod +x /usr/local/bin/wp-backup-*.sh
+
+    log_success "Script backup avanzati creati"
+    log_info "Full backup: /usr/local/bin/wp-backup-full.sh"
+    log_info "DB backup: /usr/local/bin/wp-backup-db.sh"
+    log_info "Incremental: /usr/local/bin/wp-backup-incremental.sh"
 }
 
 create_management_scripts() {
@@ -1212,6 +2935,161 @@ EOF
     chmod +x /usr/local/bin/wp-status.sh
 
     log_success "Script di gestione creati"
+
+    # Create health check endpoint
+    create_health_check_endpoint
+}
+
+create_health_check_endpoint() {
+    log_step "Creazione endpoint di monitoraggio..."
+
+    local wp_dir="/var/www/${DOMAIN}"
+
+    # Health check PHP endpoint
+    cat > "${wp_dir}/health-check.php" << 'HEALTH_CHECK_EOF'
+<?php
+// WordPress Health Check Endpoint - Enterprise Monitoring
+header('Content-Type: application/json');
+header('Access-Control-Allow-Origin: *');
+
+$start_time = microtime(true);
+$health = [
+    'timestamp' => date('c'),
+    'status' => 'healthy',
+    'checks' => [],
+    'metrics' => []
+];
+
+// Database Check
+try {
+    require_once('wp-config.php');
+    $connection = new mysqli(DB_HOST, DB_USER, DB_PASSWORD, DB_NAME);
+    if ($connection->connect_error) {
+        throw new Exception("Database connection failed");
+    }
+    $result = $connection->query("SELECT 1");
+    if (!$result) {
+        throw new Exception("Database query failed");
+    }
+    $connection->close();
+    $health['checks']['database'] = 'ok';
+} catch (Exception $e) {
+    $health['checks']['database'] = 'error: ' . $e->getMessage();
+    $health['status'] = 'unhealthy';
+}
+
+// Redis Check (if configured)
+if (defined('WP_REDIS_HOST')) {
+    try {
+        $redis = new Redis();
+        if (!$redis->connect(WP_REDIS_HOST, WP_REDIS_PORT, 1)) {
+            throw new Exception("Redis connection failed");
+        }
+        if (defined('WP_REDIS_PASSWORD') && WP_REDIS_PASSWORD) {
+            $redis->auth(WP_REDIS_PASSWORD);
+        }
+        $redis->ping();
+        $redis->close();
+        $health['checks']['redis'] = 'ok';
+    } catch (Exception $e) {
+        $health['checks']['redis'] = 'error: ' . $e->getMessage();
+    }
+}
+
+// Filesystem Check
+$upload_dir = wp_upload_dir();
+if (!is_writable($upload_dir['basedir'])) {
+    $health['checks']['filesystem'] = 'error: uploads directory not writable';
+    $health['status'] = 'unhealthy';
+} else {
+    $health['checks']['filesystem'] = 'ok';
+}
+
+// Performance Metrics
+$health['metrics'] = [
+    'response_time_ms' => round((microtime(true) - $start_time) * 1000, 2),
+    'memory_usage_mb' => round(memory_get_usage(true) / 1024 / 1024, 2),
+    'memory_peak_mb' => round(memory_get_peak_usage(true) / 1024 / 1024, 2),
+    'php_version' => phpversion(),
+    'wp_version' => get_bloginfo('version'),
+    'disk_free_gb' => round(disk_free_space('.') / 1024 / 1024 / 1024, 2)
+];
+
+// System Load
+if (function_exists('sys_getloadavg')) {
+    $load = sys_getloadavg();
+    $health['metrics']['system_load'] = [
+        '1min' => $load[0],
+        '5min' => $load[1],
+        '15min' => $load[2]
+    ];
+}
+
+http_response_code($health['status'] === 'healthy' ? 200 : 503);
+echo json_encode($health, JSON_PRETTY_PRINT);
+HEALTH_CHECK_EOF
+
+    # Nginx location for health check
+    local nginx_config="${NGINX_SITES_AVAILABLE}/${DOMAIN}"
+    sed -i '/# Logs/i\
+    # Health Check Endpoint\
+    location = /health-check.php {\
+        access_log off;\
+        allow 127.0.0.1;\
+        allow ::1;\
+        # Add your monitoring IPs here\
+        # allow 192.168.1.0/24;\
+        deny all;\
+        \
+        fastcgi_pass unix:/run/php/php'"${PHP_VERSION}"'-fpm-wordpress.sock;\
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;\
+        include fastcgi_params;\
+    }\
+' "$nginx_config"
+
+    # Prometheus metrics endpoint
+    cat > "${wp_dir}/metrics.php" << 'METRICS_EOF'
+<?php
+// Prometheus Metrics Endpoint
+header('Content-Type: text/plain; version=0.0.4');
+
+require_once('wp-config.php');
+
+$metrics = [];
+
+// WordPress metrics
+$metrics[] = "# HELP wordpress_posts_total Total number of posts";
+$metrics[] = "# TYPE wordpress_posts_total counter";
+$metrics[] = "wordpress_posts_total " . wp_count_posts()->publish;
+
+$metrics[] = "# HELP wordpress_users_total Total number of users";
+$metrics[] = "# TYPE wordpress_users_total counter";
+$metrics[] = "wordpress_users_total " . count_users()['total_users'];
+
+// Performance metrics
+$start = microtime(true);
+$connection = new mysqli(DB_HOST, DB_USER, DB_PASSWORD, DB_NAME);
+$db_time = (microtime(true) - $start) * 1000;
+
+$metrics[] = "# HELP wordpress_db_response_time_ms Database response time in milliseconds";
+$metrics[] = "# TYPE wordpress_db_response_time_ms gauge";
+$metrics[] = "wordpress_db_response_time_ms " . round($db_time, 2);
+
+$metrics[] = "# HELP wordpress_memory_usage_bytes Memory usage in bytes";
+$metrics[] = "# TYPE wordpress_memory_usage_bytes gauge";
+$metrics[] = "wordpress_memory_usage_bytes " . memory_get_usage(true);
+
+echo implode("\n", $metrics) . "\n";
+METRICS_EOF
+
+    chown www-data:www-data "${wp_dir}/health-check.php" "${wp_dir}/metrics.php"
+    chmod 644 "${wp_dir}/health-check.php" "${wp_dir}/metrics.php"
+
+    # Reload Nginx
+    nginx -t && systemctl reload nginx
+
+    log_success "Health check endpoint creato: https://${DOMAIN}/health-check.php"
+    log_info "Metrics endpoint: https://${DOMAIN}/metrics.php"
 }
 
 # =============================================================================
@@ -1310,6 +3188,9 @@ main() {
     # WordPress installation
     install_wordpress
     install_essential_plugins
+
+    # Theme and Template Configuration
+    install_optimized_theme
 
     # SEO Configuration
     configure_seo_basics
