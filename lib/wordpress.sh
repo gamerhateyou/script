@@ -130,9 +130,59 @@ configure_params() {
     read -s -p "Password admin WordPress: " WP_ADMIN_PASS
     echo
 
-    # Optional services
-    read -p "IP server Redis [opzionale]: " REDIS_HOST
-    read -p "IP server MinIO [opzionale]: " MINIO_HOST
+    # Optional services - Redis
+    read -p "Configurare Redis Object Cache? [y/N]: " USE_REDIS
+    if [[ "${USE_REDIS,,}" =~ ^(y|yes|s|si)$ ]]; then
+        while true; do
+            read -p "IP server Redis: " REDIS_HOST
+            if validate_ip "$REDIS_HOST"; then
+                break
+            else
+                log_error "Indirizzo IP Redis non valido"
+            fi
+        done
+        read -p "Porta Redis [6379]: " REDIS_PORT
+        REDIS_PORT="${REDIS_PORT:-6379}"
+        read -s -p "Password Redis [lascia vuoto se nessuna]: " REDIS_PASS
+        echo
+        read -p "Database Redis [0]: " REDIS_DB
+        REDIS_DB="${REDIS_DB:-0}"
+    fi
+
+    # Optional services - MinIO
+    read -p "Configurare MinIO Object Storage? [y/N]: " USE_MINIO
+    if [[ "${USE_MINIO,,}" =~ ^(y|yes|s|si)$ ]]; then
+        while true; do
+            read -p "Endpoint MinIO (es: https://minio.example.com): " MINIO_ENDPOINT
+            if [[ "$MINIO_ENDPOINT" =~ ^https?:// ]]; then
+                break
+            else
+                log_error "Endpoint MinIO non valido (deve iniziare con http:// o https://)"
+            fi
+        done
+        read -p "Access Key MinIO: " MINIO_ACCESS_KEY
+        read -s -p "Secret Key MinIO: " MINIO_SECRET_KEY
+        echo
+        read -p "Nome bucket [wordpress-media]: " MINIO_BUCKET
+        MINIO_BUCKET="${MINIO_BUCKET:-wordpress-media}"
+        read -p "Regione MinIO [us-east-1]: " MINIO_REGION
+        MINIO_REGION="${MINIO_REGION:-us-east-1}"
+    fi
+
+    # SMTP Configuration
+    read -p "Configurare SMTP per email? [y/N]: " USE_SMTP
+    if [[ "${USE_SMTP,,}" =~ ^(y|yes|s|si)$ ]]; then
+        read -p "Host SMTP: " SMTP_HOST
+        read -p "Porta SMTP [587]: " SMTP_PORT
+        SMTP_PORT="${SMTP_PORT:-587}"
+        read -p "Username SMTP: " SMTP_USER
+        read -s -p "Password SMTP: " SMTP_PASS
+        echo
+        read -p "Crittografia [TLS/SSL/none]: " SMTP_ENCRYPTION
+        SMTP_ENCRYPTION="${SMTP_ENCRYPTION:-TLS}"
+        read -p "Email mittente [${WP_ADMIN_EMAIL}]: " SMTP_FROM
+        SMTP_FROM="${SMTP_FROM:-$WP_ADMIN_EMAIL}"
+    fi
 
     # SSL configuration
     read -p "Configurare SSL automaticamente? [y/N]: " SETUP_SSL
@@ -149,6 +199,8 @@ update_system() {
     log_step "Aggiornamento sistema..."
 
     export DEBIAN_FRONTEND=noninteractive
+    export LC_ALL=C.UTF-8
+    export LANG=C.UTF-8
 
     # Update package list
     apt update -y || {
@@ -164,10 +216,14 @@ update_system() {
     # Install base packages
     apt install -y software-properties-common apt-transport-https ca-certificates \
                    curl wget gnupg lsb-release unzip zip htop net-tools \
-                   mysql-client bc || {
+                   mysql-client bc locales || {
         log_error "Errore installazione pacchetti base"
         return 1
     }
+
+    # Configure locales
+    locale-gen it_IT.UTF-8 en_US.UTF-8
+    update-locale LANG=it_IT.UTF-8
 
     # Configure timezone
     timedatectl set-timezone Europe/Rome || log_warn "Impossibile impostare timezone"
@@ -198,6 +254,9 @@ install_php() {
         "php${PHP_VERSION}-opcache" "php${PHP_VERSION}-cli" "php${PHP_VERSION}-common"
         "php${PHP_VERSION}-imagick" "php${PHP_VERSION}-bcmath" "php${PHP_VERSION}-soap"
         "php${PHP_VERSION}-xmlrpc"
+        # SEO Image optimization packages
+        "imagemagick" "webp" "jpegoptim" "optipng" "pngquant"
+        "php${PHP_VERSION}-dev" "php${PHP_VERSION}-pear"
     )
 
     # Add Redis support if configured
@@ -439,6 +498,10 @@ server {
         add_header X-Frame-Options "SAMEORIGIN" always;
         add_header X-Content-Type-Options "nosniff" always;
         add_header X-XSS-Protection "1; mode=block" always;
+
+        # SEO Headers
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
     }
 
     # Deny access to sensitive files
@@ -453,6 +516,27 @@ server {
     # WordPress XML-RPC protection
     location = /xmlrpc.php {
         deny all;
+    }
+
+    # SEO-friendly robots.txt
+    location = /robots.txt {
+        access_log off;
+        log_not_found off;
+        expires 1d;
+        add_header Cache-Control "public";
+    }
+
+    # XML Sitemaps
+    location ~* \.(xml|xsl)$ {
+        expires 1h;
+        add_header Cache-Control "public";
+        access_log off;
+    }
+
+    # Optimize feed requests
+    location ~* \/feed\/ {
+        expires 1h;
+        add_header Cache-Control "public";
     }
 
     # Logs
@@ -477,17 +561,38 @@ install_wpcli() {
 
     local wpcli_phar="/tmp/wp-cli.phar"
 
-    if ! curl -o "$wpcli_phar" https://raw.githubusercontent.com/wp-cli/wp-cli/v2.8.1/wp-cli.phar; then
-        log_error "Errore download WP-CLI"
+    # Remove existing file if present
+    rm -f "$wpcli_phar"
+
+    # Download WP-CLI with proper error handling
+    if ! curl -L -o "$wpcli_phar" "https://github.com/wp-cli/wp-cli/releases/download/v2.8.1/wp-cli-2.8.1.phar"; then
+        log_warn "Fallback al download diretto..."
+        if ! wget -O "$wpcli_phar" "https://github.com/wp-cli/wp-cli/releases/download/v2.8.1/wp-cli-2.8.1.phar"; then
+            log_error "Errore download WP-CLI da entrambe le fonti"
+            return 1
+        fi
+    fi
+
+    # Verify file size (should be > 1MB)
+    local file_size=$(stat --format=%s "$wpcli_phar" 2>/dev/null || echo 0)
+    if [ "$file_size" -lt 1048576 ]; then
+        log_error "File WP-CLI scaricato incompleto (${file_size} bytes)"
+        return 1
+    fi
+
+    # Verify it's a valid phar file
+    if ! php -r "try { new Phar('$wpcli_phar'); echo 'OK'; } catch (Exception \$e) { echo 'FAIL'; exit(1); }" >/dev/null 2>&1; then
+        log_error "File WP-CLI non valido"
         return 1
     fi
 
     chmod +x "$wpcli_phar"
     mv "$wpcli_phar" /usr/local/bin/wp
 
-    # Verify installation
-    if wp --info >/dev/null 2>&1; then
-        log_success "WP-CLI installato"
+    # Verify installation with timeout
+    if timeout 10 wp --info >/dev/null 2>&1; then
+        log_success "WP-CLI installato e verificato"
+        wp --version
     else
         log_error "Errore verifica WP-CLI"
         return 1
@@ -575,6 +680,22 @@ define('COMPRESS_CSS', true);
 define('COMPRESS_SCRIPTS', true);
 define('CONCATENATE_SCRIPTS', false);
 
+/* SEO Performance Optimizations */
+define('AUTOSAVE_INTERVAL', 300);
+define('WP_POST_REVISIONS', 3);
+define('MEDIA_TRASH', true);
+define('EMPTY_TRASH_DAYS', 30);
+
+/* Image Optimization */
+define('WP_IMAGE_EDITOR', 'WP_Image_Editor_Imagick');
+define('BIG_IMAGE_SIZE_THRESHOLD', 2048);
+define('WP_DEFAULT_THEME', 'generatepress');
+
+/* Database Optimization */
+define('WP_ALLOW_REPAIR', false);
+define('AUTOMATIC_UPDATER_DISABLED', false);
+define('WP_AUTO_UPDATE_CORE', 'minor');
+
 /* Security Keys */
 EOF
 
@@ -582,17 +703,66 @@ EOF
     sudo -u www-data wp config shuffle-salts
 
     # Redis configuration if available
-    if [[ -n "$REDIS_HOST" ]]; then
+    if [[ "${USE_REDIS:-}" == "y"* ]] || [[ "${USE_REDIS,,}" =~ ^(yes|s|si)$ ]]; then
         cat >> wp-config.php << EOF
 
-/* Redis Object Cache */
+/* Redis Object Cache Configuration */
 define('WP_REDIS_HOST', '${REDIS_HOST}');
-define('WP_REDIS_PORT', 6379);
+define('WP_REDIS_PORT', ${REDIS_PORT});
 define('WP_REDIS_TIMEOUT', 1);
 define('WP_REDIS_READ_TIMEOUT', 1);
-define('WP_REDIS_DATABASE', 0);
+define('WP_REDIS_DATABASE', ${REDIS_DB});
 EOF
+        if [[ -n "$REDIS_PASS" ]]; then
+            cat >> wp-config.php << EOF
+define('WP_REDIS_PASSWORD', '${REDIS_PASS}');
+EOF
+        fi
         log_info "Configurazione Redis aggiunta"
+    fi
+
+    # MinIO S3 configuration if available
+    if [[ "${USE_MINIO:-}" == "y"* ]] || [[ "${USE_MINIO,,}" =~ ^(yes|s|si)$ ]]; then
+        cat >> wp-config.php << EOF
+
+/* MinIO S3 Object Storage Configuration */
+define('AS3CF_SETTINGS', serialize(array(
+    'provider' => 'other',
+    'access-key-id' => '${MINIO_ACCESS_KEY}',
+    'secret-access-key' => '${MINIO_SECRET_KEY}',
+    'bucket' => '${MINIO_BUCKET}',
+    'region' => '${MINIO_REGION}',
+    'domain' => 'cloudfront',
+    'cloudfront' => '${MINIO_ENDPOINT}',
+    'enable-object-prefix' => true,
+    'object-prefix' => 'wp-content/uploads/',
+    'use-server-roles' => false,
+    'copy-to-s3' => true,
+    'serve-from-s3' => true,
+)));
+EOF
+        log_info "Configurazione MinIO S3 aggiunta"
+    fi
+
+    # SMTP configuration if available
+    if [[ "${USE_SMTP:-}" == "y"* ]] || [[ "${USE_SMTP,,}" =~ ^(yes|s|si)$ ]]; then
+        cat >> wp-config.php << EOF
+
+/* SMTP Email Configuration */
+define('WPMS_ON', true);
+define('WPMS_MAIL_FROM', '${SMTP_FROM}');
+define('WPMS_MAIL_FROM_NAME', '${SITE_NAME}');
+define('WPMS_MAILER', 'smtp');
+define('WPMS_SET_RETURN_PATH', true);
+define('WPMS_SMTP_HOST', '${SMTP_HOST}');
+define('WPMS_SMTP_PORT', ${SMTP_PORT});
+define('WPMS_SMTP_AUTH', true);
+define('WPMS_SMTP_AUTOTLS', true);
+define('WPMS_SMTP_SECURE', '${SMTP_ENCRYPTION,,}');
+define('WPMS_SMTP_USER', '${SMTP_USER}');
+define('WPMS_SMTP_PASS', '${SMTP_PASS}');
+EOF
+        log_info "Configurazione SMTP aggiunta"
     fi
 
     log_success "Configurazioni avanzate applicate"
@@ -614,11 +784,37 @@ install_essential_plugins() {
         "updraftplus"
         "limit-login-attempts-reloaded"
         "ssl-insecure-content-fixer"
-        "wp-mail-smtp"
+        # SEO Essential Plugins
+        "wordpress-seo"
+        "google-sitemap-generator"
+        "wp-super-cache"
+        "autoptimize"
+        "smush"
+        "broken-link-checker"
+        "google-analytics-dashboard-for-wp"
+        "schema"
+        "amp"
+        "web-stories"
+        # Performance SEO
+        "wp-fastest-cache"
+        "lazy-load"
+        "webp-express"
     )
 
     # Add Redis plugin if configured
-    [[ -n "$REDIS_HOST" ]] && plugins+=("redis-cache")
+    if [[ "${USE_REDIS:-}" == "y"* ]] || [[ "${USE_REDIS,,}" =~ ^(yes|s|si)$ ]]; then
+        plugins+=("redis-cache")
+    fi
+
+    # Add MinIO S3 plugin if configured
+    if [[ "${USE_MINIO:-}" == "y"* ]] || [[ "${USE_MINIO,,}" =~ ^(yes|s|si)$ ]]; then
+        plugins+=("amazon-s3-and-cloudfront")
+    fi
+
+    # Add SMTP plugin if configured
+    if [[ "${USE_SMTP:-}" == "y"* ]] || [[ "${USE_SMTP,,}" =~ ^(yes|s|si)$ ]]; then
+        plugins+=("wp-mail-smtp")
+    fi
 
     # Install and activate plugins
     for plugin in "${plugins[@]}"; do
@@ -630,13 +826,202 @@ install_essential_plugins() {
     done
 
     # Configure Redis Cache if available
-    if [[ -n "$REDIS_HOST" ]]; then
-        if sudo -u www-data wp redis enable; then
-            log_success "Redis Object Cache attivato"
+    if [[ "${USE_REDIS:-}" == "y"* ]] || [[ "${USE_REDIS,,}" =~ ^(yes|s|si)$ ]]; then
+        # Test Redis connection first
+        if test_redis_connection "$REDIS_HOST" "$REDIS_PORT" "$REDIS_PASS"; then
+            if sudo -u www-data wp redis enable; then
+                log_success "Redis Object Cache attivato e connessione testata"
+            else
+                log_warn "Errore attivazione Redis Cache"
+            fi
         else
-            log_warn "Errore attivazione Redis Cache"
+            log_warn "Redis configurato ma connessione non disponibile"
         fi
     fi
+
+    # Configure MinIO S3 if available
+    if [[ "${USE_MINIO:-}" == "y"* ]] || [[ "${USE_MINIO,,}" =~ ^(yes|s|si)$ ]]; then
+        if test_minio_connection "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"; then
+            # Create bucket if it doesn't exist
+            create_minio_bucket "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY" "$MINIO_BUCKET"
+            log_success "MinIO S3 configurato e bucket creato/verificato"
+        else
+            log_warn "MinIO configurato ma connessione non disponibile"
+        fi
+    fi
+}
+
+# =============================================================================
+# SEO CONFIGURATION
+# =============================================================================
+
+configure_seo_basics() {
+    log_step "Configurazione SEO di base..."
+
+    cd "/var/www/${DOMAIN}"
+
+    # Create robots.txt
+    cat > robots.txt << EOF
+User-agent: *
+Allow: /
+
+# WordPress directories
+Disallow: /wp-admin/
+Disallow: /wp-includes/
+Disallow: /wp-content/plugins/
+Disallow: /wp-content/cache/
+Disallow: /wp-content/themes/
+Disallow: /trackback/
+Disallow: /comments/
+Disallow: */trackback/
+Disallow: */comments/
+Disallow: *?*
+Disallow: *?
+
+# WordPress files
+Disallow: /wp-login.php
+Disallow: /wp-register.php
+Disallow: /wp-config.php
+Disallow: /readme.html
+Disallow: /license.txt
+
+# Allow important SEO files
+Allow: /wp-content/uploads/
+Allow: /wp-*.png
+Allow: /wp-*.jpg
+Allow: /wp-*.jpeg
+Allow: /wp-*.gif
+Allow: /wp-*.js
+Allow: /wp-*.css
+
+# Sitemap
+Sitemap: https://${DOMAIN}/sitemap_index.xml
+Sitemap: https://${DOMAIN}/sitemap.xml
+EOF
+
+    # Create .htaccess for Apache fallback (if needed)
+    cat > .htaccess << 'HTACCESS_EOF'
+# BEGIN WordPress SEO
+<IfModule mod_rewrite.c>
+RewriteEngine On
+RewriteBase /
+
+# Force HTTPS
+RewriteCond %{HTTPS} off
+RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+
+# Remove www (optional - configure based on preference)
+# RewriteCond %{HTTP_HOST} ^www\.(.*)$ [NC]
+# RewriteRule ^(.*)$ https://%1/$1 [R=301,L]
+
+# WordPress permalink structure
+RewriteRule ^index\.php$ - [L]
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule . /index.php [L]
+</IfModule>
+
+# Browser caching for SEO
+<IfModule mod_expires.c>
+ExpiresActive on
+ExpiresByType text/css "access plus 1 year"
+ExpiresByType application/javascript "access plus 1 year"
+ExpiresByType image/png "access plus 1 year"
+ExpiresByType image/jpg "access plus 1 year"
+ExpiresByType image/jpeg "access plus 1 year"
+ExpiresByType image/gif "access plus 1 year"
+</IfModule>
+
+# Gzip compression
+<IfModule mod_deflate.c>
+AddOutputFilterByType DEFLATE text/html text/plain text/xml text/css text/javascript application/javascript application/x-javascript
+</IfModule>
+# END WordPress SEO
+HTACCESS_EOF
+
+    # Set WordPress SEO basics via WP-CLI
+    configure_yoast_seo
+
+    # Configure other SEO plugins
+    configure_seo_plugins
+
+    log_success "Configurazioni SEO di base applicate"
+}
+
+configure_yoast_seo() {
+    log_step "Configurazione Yoast SEO..."
+
+    # Basic Yoast SEO settings
+    sudo -u www-data wp option update wpseo '{
+        "ms_defaults_set": true,
+        "version": "22.0",
+        "disableadvanced_meta": false,
+        "onpage_indexability": true,
+        "content_analysis_active": true,
+        "keyword_analysis_active": true,
+        "enable_admin_bar_menu": true,
+        "enable_cornerstone_content": true,
+        "enable_xml_sitemap": true,
+        "enable_text_link_counter": true,
+        "show_onboarding_notice": false,
+        "first_activated_on": false,
+        "myyoast_api_request_failed": false,
+        "plugin_suggestions_done": true,
+        "dismiss_configuration_workout_notice": true,
+        "dismiss_premium_deactivated_notice": true,
+        "workouts_data": false,
+        "importers_deactivated": true,
+        "activation_redirect_timestamp_not_installed": 1
+    }' --format=json 2>/dev/null || log_warn "Yoast SEO non ancora attivo"
+
+    # Enable XML sitemaps
+    sudo -u www-data wp option update wpseo_xml '{
+        "sitemap_index": "on",
+        "post_types-post": "on",
+        "post_types-page": "on",
+        "taxonomies-category": "on",
+        "taxonomies-post_tag": "on",
+        "author_sitemap": "on",
+        "disable_author_sitemap": true,
+        "disable_author_noposts": true
+    }' --format=json 2>/dev/null || log_warn "Configurazione Yoast XML non applicata"
+
+    log_info "Yoast SEO configurato (potrebbe richiedere configurazione manuale)"
+}
+
+configure_seo_plugins() {
+    log_step "Configurazione plugin SEO aggiuntivi..."
+
+    # Configure Schema plugin
+    sudo -u www-data wp option update schema_wp_settings '{
+        "schema_type": "Organization",
+        "site_name": "'"${SITE_NAME}"'",
+        "site_logo": "",
+        "default_image": "",
+        "knowledge_graph": true,
+        "publisher": true
+    }' --format=json 2>/dev/null || log_warn "Schema plugin non configurato"
+
+    # Configure Google Analytics (if plugin active)
+    sudo -u www-data wp option update exactmetrics_settings '{
+        "analytics_profile": "",
+        "manual_ua_code_hidden": "",
+        "hide_admin_bar_reports": "",
+        "dashboards_disabled": "",
+        "anonymize_ips": true,
+        "demographics": true,
+        "ignore_users": ["administrator"]
+    }' --format=json 2>/dev/null || log_warn "Google Analytics non configurato"
+
+    # Enable AMP if installed
+    sudo -u www-data wp option update amp-options '{
+        "theme_support": "standard",
+        "supported_post_types": ["post", "page"],
+        "analytics": {},
+        "gtag_id": ""
+    }' --format=json 2>/dev/null || log_warn "AMP non configurato"
+
+    log_info "Plugin SEO aggiuntivi configurati"
 }
 
 # =============================================================================
@@ -926,6 +1311,9 @@ main() {
     install_wordpress
     install_essential_plugins
 
+    # SEO Configuration
+    configure_seo_basics
+
     # Security and SSL
     setup_ssl_certificates
     configure_security
@@ -961,6 +1349,93 @@ WORDPRESS_SCRIPT_EOF
 
     chmod +x "$output_file"
     log_success "Script WordPress generato: $output_file"
+}
+
+# =============================================================================
+# EXTERNAL SERVICES TESTING
+# =============================================================================
+
+test_redis_connection() {
+    local redis_host="$1"
+    local redis_port="$2"
+    local redis_pass="$3"
+
+    log_step "Test connessione Redis..."
+
+    # Install redis-tools if not present
+    if ! command -v redis-cli >/dev/null 2>&1; then
+        apt install -y redis-tools >/dev/null 2>&1
+    fi
+
+    # Test connection
+    local redis_cmd="redis-cli -h $redis_host -p $redis_port"
+    if [[ -n "$redis_pass" ]]; then
+        redis_cmd="$redis_cmd -a $redis_pass"
+    fi
+
+    if $redis_cmd ping 2>/dev/null | grep -q "PONG"; then
+        log_success "✓ Redis connessione OK ($redis_host:$redis_port)"
+        return 0
+    else
+        log_error "✗ Redis connessione fallita ($redis_host:$redis_port)"
+        return 1
+    fi
+}
+
+test_minio_connection() {
+    local endpoint="$1"
+    local access_key="$2"
+    local secret_key="$3"
+
+    log_step "Test connessione MinIO..."
+
+    # Install mc (MinIO Client) if not present
+    if ! command -v mc >/dev/null 2>&1; then
+        curl -o /tmp/mc https://dl.min.io/client/mc/release/linux-amd64/mc
+        chmod +x /tmp/mc
+        mv /tmp/mc /usr/local/bin/
+    fi
+
+    # Configure mc alias
+    if mc alias set testminio "$endpoint" "$access_key" "$secret_key" >/dev/null 2>&1; then
+        if mc ls testminio >/dev/null 2>&1; then
+            log_success "✓ MinIO connessione OK ($endpoint)"
+            return 0
+        fi
+    fi
+
+    log_error "✗ MinIO connessione fallita ($endpoint)"
+    return 1
+}
+
+create_minio_bucket() {
+    local endpoint="$1"
+    local access_key="$2"
+    local secret_key="$3"
+    local bucket="$4"
+
+    log_step "Verifica/creazione bucket MinIO..."
+
+    # Configure mc alias
+    mc alias set autominio "$endpoint" "$access_key" "$secret_key" >/dev/null 2>&1
+
+    # Check if bucket exists
+    if mc ls "autominio/$bucket" >/dev/null 2>&1; then
+        log_info "Bucket '$bucket' già esistente"
+    else
+        # Create bucket
+        if mc mb "autominio/$bucket" >/dev/null 2>&1; then
+            log_success "Bucket '$bucket' creato con successo"
+
+            # Set public read policy for uploads folder
+            mc anonymous set download "autominio/$bucket/wp-content/uploads" >/dev/null 2>&1
+        else
+            log_error "Errore creazione bucket '$bucket'"
+            return 1
+        fi
+    fi
+
+    return 0
 }
 
 # =============================================================================

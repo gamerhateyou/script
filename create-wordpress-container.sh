@@ -180,9 +180,13 @@ configure_container_system() {
 
     local update_commands="
         export DEBIAN_FRONTEND=noninteractive
+        export LC_ALL=C.UTF-8
+        export LANG=C.UTF-8
         apt update -y
         apt upgrade -y
-        apt install -y curl wget git nano htop net-tools openssh-server bc unzip zip
+        apt install -y curl wget git nano htop net-tools openssh-server bc unzip zip locales
+        locale-gen it_IT.UTF-8 en_US.UTF-8
+        update-locale LANG=it_IT.UTF-8
         timedatectl set-timezone Europe/Rome
         apt autoremove -y
         apt autoclean
