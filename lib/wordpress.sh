@@ -160,13 +160,48 @@ configure_params() {
                 log_error "Endpoint MinIO non valido (deve iniziare con http:// o https://)"
             fi
         done
-        read -p "Access Key MinIO: " MINIO_ACCESS_KEY
-        read -s -p "Secret Key MinIO: " MINIO_SECRET_KEY
-        echo
+
         read -p "Nome bucket [wordpress-media]: " MINIO_BUCKET
         MINIO_BUCKET="${MINIO_BUCKET:-wordpress-media}"
         read -p "Regione MinIO [us-east-1]: " MINIO_REGION
         MINIO_REGION="${MINIO_REGION:-us-east-1}"
+
+        # Scelta modalità configurazione
+        echo
+        echo "Modalità configurazione MinIO:"
+        echo "1) Usa credenziali esistenti"
+        echo "2) Crea nuovo utente dedicato (raccomandato)"
+        while true; do
+            read -p "Scegli [1-2]: " MINIO_MODE
+            case $MINIO_MODE in
+                1)
+                    read -p "Access Key MinIO esistente: " MINIO_ACCESS_KEY
+                    read -s -p "Secret Key MinIO esistente: " MINIO_SECRET_KEY
+                    echo
+                    break
+                    ;;
+                2)
+                    echo "=== Credenziali Admin MinIO (per creare utente dedicato) ==="
+                    read -p "Access Key Admin MinIO: " MINIO_ADMIN_ACCESS_KEY
+                    read -s -p "Secret Key Admin MinIO: " MINIO_ADMIN_SECRET_KEY
+                    echo
+
+                    echo "=== Nuovo utente WordPress ==="
+                    read -p "Username utente WordPress MinIO [wp-${DOMAIN//./}-user]: " MINIO_WP_USER
+                    MINIO_WP_USER="${MINIO_WP_USER:-wp-${DOMAIN//./}-user}"
+                    read -s -p "Password utente WordPress MinIO: " MINIO_WP_PASS
+                    echo
+
+                    # Le credenziali WordPress saranno quelle del nuovo utente
+                    MINIO_ACCESS_KEY="$MINIO_WP_USER"
+                    MINIO_SECRET_KEY="$MINIO_WP_PASS"
+                    break
+                    ;;
+                *)
+                    echo "Scelta non valida. Inserisci 1 o 2."
+                    ;;
+            esac
+        done
     fi
 
     # SMTP Configuration
@@ -1141,6 +1176,9 @@ install_plugin_with_fallback() {
         "wp-optimize")
             fallback_plugins=("wp-optimize-premium" "wp-optimize-by-xtremerain")
             ;;
+        "wp-gdpr-compliance")
+            fallback_plugins=("complianz-gdpr" "gdpr-cookie-consent" "cookie-notice")
+            ;;
         *)
             fallback_plugins=()
             ;;
@@ -1311,8 +1349,8 @@ configure_essential_plugins() {
     # 12. Configure AMP
     configure_amp_plugin
 
-    # 13. Configure GDPR/Privacy Compliance
-    configure_gdpr_compliance
+    # 13. Configure GDPR/Privacy Compliance (with user prompt)
+    configure_gdpr_with_prompt
 
     log_success "Tutti i plugin sono stati configurati ottimamente"
 }
@@ -1555,11 +1593,47 @@ configure_redis_cache() {
 configure_s3_plugin() {
     log_step "Configurazione Amazon S3 and CloudFront..."
 
+    # Se modalità 2 (crea nuovo utente), crea prima utente e policy
+    if [[ "${MINIO_MODE:-}" == "2" ]]; then
+        log_info "Configurazione utente dedicato MinIO..."
+
+        # Test connessione admin
+        if test_minio_connection "$MINIO_ENDPOINT" "$MINIO_ADMIN_ACCESS_KEY" "$MINIO_ADMIN_SECRET_KEY"; then
+            log_success "Connessione admin MinIO verificata"
+
+            # Crea policy per il bucket
+            local policy_name="wp-${DOMAIN//./}-policy"
+            if create_minio_policy "$MINIO_ENDPOINT" "$MINIO_ADMIN_ACCESS_KEY" "$MINIO_ADMIN_SECRET_KEY" "$MINIO_BUCKET" "$policy_name"; then
+                log_success "Policy MinIO creata: $policy_name"
+
+                # Crea utente e assegna policy
+                if create_minio_user "$MINIO_ENDPOINT" "$MINIO_ADMIN_ACCESS_KEY" "$MINIO_ADMIN_SECRET_KEY" "$MINIO_WP_USER" "$MINIO_WP_PASS" "$policy_name"; then
+                    log_success "Utente MinIO creato: $MINIO_WP_USER"
+                else
+                    log_error "Fallimento creazione utente MinIO"
+                    return 1
+                fi
+            else
+                log_error "Fallimento creazione policy MinIO"
+                return 1
+            fi
+        else
+            log_error "Connessione admin MinIO fallita"
+            return 1
+        fi
+    fi
+
+    # Test connessione con credenziali WordPress (nuove o esistenti)
     if test_minio_connection "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"; then
         # Create bucket if it doesn't exist
-        create_minio_bucket "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY" "$MINIO_BUCKET"
+        # Se modalità 2, usa credenziali admin per creare bucket
+        if [[ "${MINIO_MODE:-}" == "2" ]]; then
+            create_minio_bucket "$MINIO_ENDPOINT" "$MINIO_ADMIN_ACCESS_KEY" "$MINIO_ADMIN_SECRET_KEY" "$MINIO_BUCKET"
+        else
+            create_minio_bucket "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY" "$MINIO_BUCKET"
+        fi
 
-        # Configure S3 plugin
+        # Configure S3 plugin con credenziali WordPress
         wp --allow-root option update amazon_s3_and_cloudfront_settings '{
             "provider": "other",
             "access-key-id": "'${MINIO_ACCESS_KEY}'",
@@ -1576,6 +1650,7 @@ configure_s3_plugin() {
         }' --format=json --quiet 2>/dev/null || true
 
         log_success "MinIO S3 configurato e bucket creato/verificato"
+        [[ "${MINIO_MODE:-}" == "2" ]] && log_info "Utilizzando utente dedicato: $MINIO_WP_USER"
     else
         log_warn "MinIO configurato ma connessione non disponibile"
     fi
@@ -1667,6 +1742,71 @@ configure_amp_plugin() {
     wp --allow-root option update amp-options "$amp_settings" --format=json --quiet 2>/dev/null || true
 
     log_success "AMP configurato"
+}
+
+configure_gdpr_with_prompt() {
+    echo ""
+    echo "┌──────────────────────────────────────────────────────────────┐"
+    echo "│                   CONFORMITÀ GDPR/PRIVACY                   │"
+    echo "└──────────────────────────────────────────────────────────────┘"
+    echo ""
+    echo "I plugin per la conformità GDPR sono stati installati:"
+    echo "• Cookie Law Info / Complianz GDPR"
+    echo "• Pagine Privacy Policy e Cookie Policy"
+    echo "• Configurazione Google Analytics conforme GDPR"
+    echo "• Form di contatto privacy-compliant"
+    echo ""
+    echo -e "${YELLOW}IMPORTANTE:${NC} La configurazione GDPR richiede personalizzazione"
+    echo "per essere completamente conforme alla tua attività specifica."
+    echo ""
+
+    while true; do
+        echo -ne "Vuoi configurare la conformità GDPR automaticamente ora? ${GREEN}[s/N]${NC}: "
+        read -r gdpr_choice
+
+        case "${gdpr_choice,,}" in
+            s|si|sì|y|yes)
+                echo ""
+                log_info "Configurazione GDPR automatica in corso..."
+                configure_gdpr_compliance
+                echo ""
+                echo -e "${YELLOW}⚠️  ATTENZIONE IMPORTANTE:${NC}"
+                echo "La configurazione automatica fornisce una base GDPR-compliant,"
+                echo "ma dovrai personalizzare:"
+                echo ""
+                echo "1. 📝 Testi dei cookie banner per la tua attività"
+                echo "2. 🏢 Informazioni azienda nella Privacy Policy"
+                echo "3. 📧 Dati di contatto del DPO/Responsabile Privacy"
+                echo "4. 🔧 Configurazioni specifiche per i tuoi servizi"
+                echo "5. ⚖️  Basi legali per il trattamento dati"
+                echo ""
+                echo -e "${GREEN}💡 SUGGERIMENTO:${NC} Accedi al pannello admin WordPress per:"
+                echo "   • Personalizzare i testi nei plugin GDPR"
+                echo "   • Completare Privacy Policy e Cookie Policy"
+                echo "   • Testare i banner e form di consenso"
+                echo ""
+                break
+                ;;
+            n|no|"")
+                echo ""
+                log_info "Configurazione GDPR rimandata"
+                echo -e "${BLUE}ℹ️  I plugin GDPR sono installati ma non configurati.${NC}"
+                echo "Potrai configurarli manualmente tramite:"
+                echo ""
+                echo "1. 🔧 Dashboard WordPress → Impostazioni → Privacy"
+                echo "2. 🍪 Dashboard WordPress → Cookie Law Info"
+                echo "3. 🛡️  Dashboard WordPress → Complianz"
+                echo "4. 📄 Creare/modificare le pagine Privacy e Cookie Policy"
+                echo ""
+                echo -e "${YELLOW}💡 CONSIGLIO:${NC} Configura la conformità GDPR prima del lancio!"
+                echo ""
+                break
+                ;;
+            *)
+                echo -e "${RED}Scelta non valida. Inserisci 's' per Sì o 'n' per No${NC}"
+                ;;
+        esac
+    done
 }
 
 configure_gdpr_compliance() {
@@ -3723,6 +3863,92 @@ create_minio_bucket() {
     fi
 
     return 0
+}
+
+create_minio_policy() {
+    local endpoint="$1"
+    local admin_access_key="$2"
+    local admin_secret_key="$3"
+    local bucket="$4"
+    local policy_name="$5"
+
+    log_step "Creazione policy MinIO '$policy_name'..."
+
+    # Configure mc admin alias
+    mc alias set adminminio "$endpoint" "$admin_access_key" "$admin_secret_key" >/dev/null 2>&1
+
+    # Create temporary policy file
+    local policy_file="/tmp/minio-${policy_name}.json"
+    cat > "$policy_file" <<EOF
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetBucketLocation",
+                "s3:ListBucket"
+            ],
+            "Resource": [
+                "arn:aws:s3:::${bucket}"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+                "s3:DeleteObject"
+            ],
+            "Resource": [
+                "arn:aws:s3:::${bucket}/*"
+            ]
+        }
+    ]
+}
+EOF
+
+    # Create or update policy
+    if mc admin policy create adminminio "$policy_name" "$policy_file" >/dev/null 2>&1; then
+        log_success "Policy '$policy_name' creata con successo"
+        rm -f "$policy_file"
+        return 0
+    else
+        log_error "Errore creazione policy '$policy_name'"
+        rm -f "$policy_file"
+        return 1
+    fi
+}
+
+create_minio_user() {
+    local endpoint="$1"
+    local admin_access_key="$2"
+    local admin_secret_key="$3"
+    local username="$4"
+    local password="$5"
+    local policy_name="$6"
+
+    log_step "Creazione utente MinIO '$username'..."
+
+    # Configure mc admin alias
+    mc alias set adminminio "$endpoint" "$admin_access_key" "$admin_secret_key" >/dev/null 2>&1
+
+    # Create user
+    if mc admin user add adminminio "$username" "$password" >/dev/null 2>&1; then
+        log_success "Utente '$username' creato con successo"
+
+        # Attach policy to user
+        if mc admin policy attach adminminio "$policy_name" --user "$username" >/dev/null 2>&1; then
+            log_success "Policy '$policy_name' assegnata all'utente '$username'"
+            return 0
+        else
+            log_error "Errore assegnazione policy all'utente '$username'"
+            return 1
+        fi
+    else
+        log_error "Errore creazione utente '$username'"
+        return 1
+    fi
 }
 
 # =============================================================================
