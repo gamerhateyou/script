@@ -961,13 +961,13 @@ install_wordpress() {
     }
 
     # Verify wp-config.php was created before fixing permissions
-    if [[ -f "$wp_dir/wp-config.php" ]]; then
+    if [[ -f "wp-config.php" ]]; then
         # Fix permissions after wp-config creation
-        chown www-data:www-data "$wp_dir/wp-config.php"
-        chmod 640 "$wp_dir/wp-config.php"
+        chown www-data:www-data "wp-config.php"
+        chmod 640 "wp-config.php"
         log_info "Permessi wp-config.php aggiornati"
     else
-        log_error "wp-config.php non trovato dopo la creazione in: $wp_dir/wp-config.php"
+        log_error "wp-config.php non trovato dopo la creazione in: $(pwd)/wp-config.php"
         # List directory contents for debugging
         log_info "Contenuto directory $wp_dir:"
         ls -la "$wp_dir/" || log_error "Impossibile elencare contenuto directory"
