@@ -921,13 +921,25 @@ install_wordpress() {
 
     # Create directory
     mkdir -p "$wp_dir"
-    cd "$wp_dir"
+    if [ ! -d "$wp_dir" ]; then
+        log_error "Impossibile creare directory: $wp_dir"
+        return 1
+    fi
+    cd "$wp_dir" || {
+        log_error "Impossibile accedere a: $wp_dir"
+        return 1
+    }
 
     # Download WordPress
     if ! wp --allow-root core download --locale="$WP_LOCALE"; then
         log_error "Errore download WordPress"
         return 1
     fi
+
+    # Fix permissions immediately after download
+    chown -R www-data:www-data "$wp_dir"
+    find "$wp_dir" -type d -exec chmod 755 {} \;
+    find "$wp_dir" -type f -exec chmod 644 {} \;
 
     # Generate secure database prefix and salts
     local db_prefix="wp_$(openssl rand -hex 3)_"
@@ -942,6 +954,10 @@ install_wordpress() {
         log_error "Errore creazione wp-config.php"
         return 1
     }
+
+    # Fix permissions after wp-config creation
+    chown www-data:www-data "$wp_dir/wp-config.php"
+    chmod 640 "$wp_dir/wp-config.php"
 
     configure_wordpress_advanced
 
