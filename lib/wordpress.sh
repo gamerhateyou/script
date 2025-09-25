@@ -944,6 +944,10 @@ install_wordpress() {
     # Generate secure database prefix and salts
     local db_prefix="wp_$(openssl rand -hex 3)_"
 
+    # Debug: Log current working directory before wp-config creation
+    log_info "Directory corrente: $(pwd)"
+    log_info "Creazione wp-config.php in: $wp_dir"
+
     # Create wp-config.php
     wp --allow-root config create \
         --dbname="$DB_NAME" \
@@ -952,12 +956,23 @@ install_wordpress() {
         --dbhost="$DB_HOST" \
         --dbprefix="$db_prefix" || {
         log_error "Errore creazione wp-config.php"
+        log_error "Directory corrente durante errore: $(pwd)"
         return 1
     }
 
-    # Fix permissions after wp-config creation
-    chown www-data:www-data "$wp_dir/wp-config.php"
-    chmod 640 "$wp_dir/wp-config.php"
+    # Verify wp-config.php was created before fixing permissions
+    if [[ -f "$wp_dir/wp-config.php" ]]; then
+        # Fix permissions after wp-config creation
+        chown www-data:www-data "$wp_dir/wp-config.php"
+        chmod 640 "$wp_dir/wp-config.php"
+        log_info "Permessi wp-config.php aggiornati"
+    else
+        log_error "wp-config.php non trovato dopo la creazione in: $wp_dir/wp-config.php"
+        # List directory contents for debugging
+        log_info "Contenuto directory $wp_dir:"
+        ls -la "$wp_dir/" || log_error "Impossibile elencare contenuto directory"
+        return 1
+    fi
 
     configure_wordpress_advanced
 
@@ -3203,8 +3218,13 @@ set_wordpress_permissions() {
     # Set file permissions
     find "$wp_dir" -type f -exec chmod 644 {} \;
 
-    # Secure wp-config.php
-    chmod 600 "$wp_dir/wp-config.php"
+    # Secure wp-config.php (only if it exists)
+    if [[ -f "$wp_dir/wp-config.php" ]]; then
+        chmod 600 "$wp_dir/wp-config.php"
+        log_info "wp-config.php secured with 600 permissions"
+    else
+        log_warn "wp-config.php non trovato, skip aggiornamento permessi"
+    fi
 
     log_success "Permessi configurati"
 }
