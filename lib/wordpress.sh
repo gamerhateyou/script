@@ -184,9 +184,33 @@ configure_params() {
         SMTP_FROM="${SMTP_FROM:-$WP_ADMIN_EMAIL}"
     fi
 
-    # SSL configuration
-    read -p "Configurare SSL automaticamente? [y/N]: " SETUP_SSL
-    [[ "${SETUP_SSL,,}" =~ ^(y|yes|s|si)$ ]] && SETUP_SSL=true || SETUP_SSL=false
+    # NPM Detection and Configuration
+    echo
+    echo "🔄 Configurazione Proxy/SSL:"
+    read -p "Hai Nginx Proxy Manager (NPM) o altro reverse proxy? [Y/n]: " USE_NPM
+    [[ "${USE_NPM,,}" =~ ^(n|no)$ ]] && USE_NPM=false || USE_NPM=true
+
+    if [ "$USE_NPM" = true ]; then
+        echo
+        echo "📋 Modalità NPM Backend rilevata:"
+        read -p "Porta interna WordPress [8080]: " INTERNAL_PORT
+        INTERNAL_PORT="${INTERNAL_PORT:-8080}"
+
+        read -p "NPM gestisce SSL/certificati? [Y/n]: " NPM_SSL
+        [[ "${NPM_SSL,,}" =~ ^(n|no)$ ]] && NPM_SSL=false || NPM_SSL=true
+
+        # Se NPM gestisce SSL, non configuriamo SSL locale
+        SETUP_SSL=false
+        NPM_MODE=true
+
+        log_info "Configurazione NPM Backend: porta $INTERNAL_PORT, SSL gestito da NPM: $NPM_SSL"
+    else
+        # Configurazione SSL tradizionale
+        read -p "Configurare SSL automaticamente? [y/N]: " SETUP_SSL
+        [[ "${SETUP_SSL,,}" =~ ^(y|yes|s|si)$ ]] && SETUP_SSL=true || SETUP_SSL=false
+        NPM_MODE=false
+        INTERNAL_PORT=80
+    fi
 
     log_success "Parametri configurati"
 }
@@ -451,6 +475,10 @@ http {
         text/x-component
         text/x-cross-domain-policy;
 
+    # Rate Limiting Zones
+    limit_req_zone $binary_remote_addr zone=wp_login:10m rate=5r/m;
+    limit_req_zone $binary_remote_addr zone=wp_admin:10m rate=10r/m;
+
     # Logging
     log_format main '$remote_addr - $remote_user [$time_local] "$request" '
                    '$status $body_bytes_sent "$http_referer" '
@@ -471,8 +499,151 @@ configure_nginx_site() {
 
     local site_config="${NGINX_SITES_AVAILABLE}/${DOMAIN}"
 
-    cat > "$site_config" << EOF
-# WordPress Configuration for ${DOMAIN} - Optimized 2025
+    if [ "$NPM_MODE" = true ]; then
+        log_info "Configurazione Nginx per NPM Backend (porta $INTERNAL_PORT)..."
+
+        cat > "$site_config" << EOF
+# WordPress NPM Backend Configuration for ${DOMAIN}
+# Optimized for Nginx Proxy Manager Backend Mode
+
+server {
+    listen ${INTERNAL_PORT};
+    listen [::]:${INTERNAL_PORT};
+
+    server_name ${DOMAIN} www.${DOMAIN} localhost;
+    root /var/www/${DOMAIN};
+    index index.php index.html index.htm;
+
+    # NPM Backend Headers Support
+    set_real_ip_from 172.16.0.0/12;
+    set_real_ip_from 192.168.0.0/16;
+    set_real_ip_from 10.0.0.0/8;
+    real_ip_header X-Forwarded-For;
+    real_ip_recursive on;
+
+    # WordPress permalinks
+    location / {
+        try_files \$uri \$uri/ /index.php?\$args;
+    }
+
+    # WordPress Admin Protection
+    location /wp-admin/ {
+        limit_req zone=wp_admin burst=10 nodelay;
+        try_files \$uri \$uri/ /index.php?\$args;
+
+        location ~ \.php\$ {
+            try_files \$uri =404;
+            fastcgi_split_path_info ^(.+\.php)(/.+)\$;
+            fastcgi_pass unix:/run/php/php${PHP_VERSION}-fpm-wordpress.sock;
+            fastcgi_index index.php;
+            fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+            include fastcgi_params;
+
+            # NPM Proxy Headers
+            fastcgi_param HTTP_X_FORWARDED_PROTO \$http_x_forwarded_proto;
+            fastcgi_param HTTP_X_FORWARDED_HOST \$http_x_forwarded_host;
+            fastcgi_param HTTP_X_REAL_IP \$http_x_real_ip;
+
+            # Security headers
+            add_header X-Frame-Options "SAMEORIGIN" always;
+            add_header X-Content-Type-Options "nosniff" always;
+            add_header X-XSS-Protection "1; mode=block" always;
+        }
+    }
+
+    # WordPress Login Protection
+    location = /wp-login.php {
+        limit_req zone=wp_login burst=3 nodelay;
+
+        try_files \$uri =404;
+        fastcgi_split_path_info ^(.+\.php)(/.+)\$;
+        fastcgi_pass unix:/run/php/php${PHP_VERSION}-fpm-wordpress.sock;
+        fastcgi_index index.php;
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        include fastcgi_params;
+
+        # NPM Proxy Headers
+        fastcgi_param HTTP_X_FORWARDED_PROTO \$http_x_forwarded_proto;
+        fastcgi_param HTTP_X_FORWARDED_HOST \$http_x_forwarded_host;
+        fastcgi_param HTTP_X_REAL_IP \$http_x_real_ip;
+    }
+
+    # PHP processing
+    location ~ \.php\$ {
+        try_files \$uri =404;
+        fastcgi_split_path_info ^(.+\.php)(/.+)\$;
+        fastcgi_pass unix:/run/php/php${PHP_VERSION}-fpm-wordpress.sock;
+        fastcgi_index index.php;
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        include fastcgi_params;
+
+        # NPM Proxy Headers
+        fastcgi_param HTTP_X_FORWARDED_PROTO \$http_x_forwarded_proto;
+        fastcgi_param HTTP_X_FORWARDED_HOST \$http_x_forwarded_host;
+        fastcgi_param HTTP_X_REAL_IP \$http_x_real_ip;
+
+        # Security headers
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-XSS-Protection "1; mode=block" always;
+    }
+
+    # Static Files Optimization for NPM
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)\$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        access_log off;
+
+        # CORS headers for static files
+        add_header Access-Control-Allow-Origin "*";
+        add_header Access-Control-Allow-Methods "GET, OPTIONS";
+    }
+
+    # Security locations
+    location ~* /(?:uploads|files)/.*\.php\$ { deny all; }
+    location ~* \.(htaccess|htpasswd|ini|log|sh|sql|tar|tgz|gz)\$ { deny all; }
+    location ~ /\. { deny all; }
+    location = /xmlrpc.php { deny all; }
+
+    # SEO optimizations
+    location = /robots.txt {
+        access_log off;
+        log_not_found off;
+        expires 1d;
+        add_header Cache-Control "public";
+    }
+
+    location ~* \.(xml|xsl)\$ {
+        expires 1h;
+        add_header Cache-Control "public";
+        access_log off;
+    }
+
+    # Health Check for NPM
+    location = /health {
+        access_log off;
+        return 200 "healthy\n";
+        add_header Content-Type text/plain;
+    }
+
+    # Status check for monitoring
+    location = /status {
+        access_log off;
+        return 200 "WordPress Backend Active - Port ${INTERNAL_PORT}\n";
+        add_header Content-Type text/plain;
+    }
+
+    # Logs
+    access_log /var/log/nginx/${DOMAIN}.access.log main;
+    error_log /var/log/nginx/${DOMAIN}.error.log warn;
+}
+EOF
+
+    else
+        log_info "Configurazione Nginx Standalone tradizionale..."
+
+        cat > "$site_config" << EOF
+# WordPress Standalone Configuration for ${DOMAIN} - Optimized 2025
 
 server {
     listen 80;
@@ -481,12 +652,12 @@ server {
     index index.php index.html index.htm;
 
     # Security
-    location ~* /(?:uploads|files)/.*\.php$ {
+    location ~* /(?:uploads|files)/.*\.php\$ {
         deny all;
     }
 
     # Static files caching
-    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)\$ {
         expires 1y;
         add_header Cache-Control "public, immutable";
         access_log off;
@@ -498,9 +669,9 @@ server {
     }
 
     # PHP processing
-    location ~ \.php$ {
+    location ~ \.php\$ {
         try_files \$uri =404;
-        fastcgi_split_path_info ^(.+\.php)(/.+)$;
+        fastcgi_split_path_info ^(.+\.php)(/.+)\$;
         fastcgi_pass unix:/run/php/php${PHP_VERSION}-fpm-wordpress.sock;
         fastcgi_index index.php;
         fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
@@ -517,7 +688,7 @@ server {
     }
 
     # Deny access to sensitive files
-    location ~* \.(htaccess|htpasswd|ini|log|sh|sql|tar|tgz|gz)$ {
+    location ~* \.(htaccess|htpasswd|ini|log|sh|sql|tar|tgz|gz)\$ {
         deny all;
     }
 
@@ -539,7 +710,7 @@ server {
     }
 
     # XML Sitemaps
-    location ~* \.(xml|xsl)$ {
+    location ~* \.(xml|xsl)\$ {
         expires 1h;
         add_header Cache-Control "public";
         access_log off;
@@ -556,6 +727,7 @@ server {
     error_log /var/log/nginx/${DOMAIN}.error.log warn;
 }
 EOF
+    fi
 
     # Enable site
     ln -sf "$site_config" "${NGINX_SITES_ENABLED}/"
@@ -738,9 +910,17 @@ install_wordpress() {
 
     configure_wordpress_advanced
 
-    # Install WordPress
+    # Install WordPress with appropriate URL
+    local wp_url="http://$DOMAIN"
+    if [ "$NPM_MODE" = true ] && [ "${NPM_SSL:-true}" = true ]; then
+        wp_url="https://$DOMAIN"
+        log_info "Installazione WordPress per NPM con HTTPS: $wp_url"
+    else
+        log_info "Installazione WordPress: $wp_url"
+    fi
+
     wp --allow-root core install \
-        --url="http://$DOMAIN" \
+        --url="$wp_url" \
         --title="$SITE_NAME" \
         --admin_user="$WP_ADMIN_USER" \
         --admin_password="$WP_ADMIN_PASS" \
@@ -750,7 +930,68 @@ install_wordpress() {
         return 1
     }
 
+    # Configure WordPress for NPM if needed
+    if [ "$NPM_MODE" = true ]; then
+        configure_wordpress_for_npm
+    fi
+
     log_success "WordPress installato"
+}
+
+# Configure WordPress for NPM Backend Mode
+configure_wordpress_for_npm() {
+    log_step "Configurazione WordPress per NPM Backend..."
+
+    cd "/var/www/$DOMAIN"
+
+    # NPM Proxy Configuration in wp-config.php
+    log_info "Aggiunta configurazione proxy NPM a wp-config.php..."
+
+    # Add NPM proxy configuration before WordPress constants
+    cat >> wp-config.php << 'NPM_CONFIG_EOF'
+
+/* =============================================================================
+   NPM PROXY CONFIGURATION
+   Configuration for WordPress behind Nginx Proxy Manager
+   ============================================================================= */
+
+// Trust proxy headers from NPM
+if (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') {
+    $_SERVER['HTTPS'] = 'on';
+    $_SERVER['SERVER_PORT'] = 443;
+}
+
+// Fix URLs behind proxy
+if (isset($_SERVER['HTTP_X_FORWARDED_HOST'])) {
+    $_SERVER['HTTP_HOST'] = $_SERVER['HTTP_X_FORWARDED_HOST'];
+}
+
+// Real IP from NPM
+if (isset($_SERVER['HTTP_X_REAL_IP'])) {
+    $_SERVER['REMOTE_ADDR'] = $_SERVER['HTTP_X_REAL_IP'];
+} elseif (isset($_SERVER['HTTP_X_FORWARDED_FOR'])) {
+    $ips = explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']);
+    $_SERVER['REMOTE_ADDR'] = trim($ips[0]);
+}
+
+// Force SSL for admin if NPM handles SSL
+if (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') {
+    define('FORCE_SSL_ADMIN', true);
+}
+
+// NPM Backend specific settings
+define('WP_HOME', 'https://' . $_SERVER['HTTP_HOST']);
+define('WP_SITEURL', 'https://' . $_SERVER['HTTP_HOST']);
+
+NPM_CONFIG_EOF
+
+    # Set correct file permissions
+    chown -R www-data:www-data "/var/www/$DOMAIN"
+    find "/var/www/$DOMAIN" -type d -exec chmod 755 {} \;
+    find "/var/www/$DOMAIN" -type f -exec chmod 644 {} \;
+    chmod 640 "/var/www/$DOMAIN/wp-config.php"
+
+    log_success "WordPress configurato per NPM Backend"
 }
 
 configure_wordpress_advanced() {
@@ -878,6 +1119,79 @@ EOF
 # PLUGINS INSTALLATION
 # =============================================================================
 
+# Install plugin with fallback for common naming issues
+install_plugin_with_fallback() {
+    local plugin="$1"
+    local fallback_plugins=()
+
+    # Define fallback plugins for common naming issues
+    case "$plugin" in
+        "wp-smushit")
+            fallback_plugins=("smush" "wp-smush-pro")
+            ;;
+        "smush")
+            fallback_plugins=("wp-smushit" "wp-smush-pro")
+            ;;
+        "google-analytics-dashboard-for-wp")
+            fallback_plugins=("exactmetrics-google-analytics-dashboard" "google-analytics-for-wordpress")
+            ;;
+        "wordpress-seo")
+            fallback_plugins=("yoast-seo" "wordpress-seo-premium")
+            ;;
+        "wp-optimize")
+            fallback_plugins=("wp-optimize-premium" "wp-optimize-by-xtremerain")
+            ;;
+        *)
+            fallback_plugins=()
+            ;;
+    esac
+
+    # Try main plugin first
+    if try_install_plugin "$plugin"; then
+        return 0
+    fi
+
+    # Try fallback plugins
+    for fallback in "${fallback_plugins[@]}"; do
+        log_info "Tentativo fallback: $fallback"
+        if try_install_plugin "$fallback"; then
+            return 0
+        fi
+    done
+
+    log_warn "Impossibile installare $plugin e tutti i fallback"
+    return 1
+}
+
+# Helper function to try installing a single plugin
+try_install_plugin() {
+    local plugin="$1"
+    local max_retries=3
+    local retry=0
+
+    while [ $retry -lt $max_retries ]; do
+        # First install without activation
+        if wp --allow-root plugin install "$plugin" --quiet 2>/dev/null; then
+            # Then activate separately to avoid user ID issues
+            if wp --allow-root plugin activate "$plugin" --quiet 2>/dev/null; then
+                log_success "Plugin installato: $plugin"
+                return 0
+            else
+                log_warn "Plugin installato ma non attivato: $plugin"
+                return 0
+            fi
+        fi
+
+        retry=$((retry + 1))
+        if [ $retry -lt $max_retries ]; then
+            log_info "Retry $retry/$max_retries per $plugin..."
+            sleep 2
+        fi
+    done
+
+    return 1
+}
+
 install_essential_plugins() {
     log_step "Installazione plugin essenziali..."
 
@@ -895,7 +1209,7 @@ install_essential_plugins() {
         "google-sitemap-generator"
         "wp-super-cache"
         "autoptimize"
-        "smush"
+        "wp-smushit"
         "broken-link-checker"
         "google-analytics-dashboard-for-wp"
         "schema"
@@ -941,19 +1255,9 @@ install_essential_plugins() {
 
     log_info "Utilizzando utente amministratore: $admin_user"
 
-    # Install and activate plugins
+    # Install and activate plugins with fallback handling
     for plugin in "${plugins[@]}"; do
-        # First install without activation
-        if wp --allow-root plugin install "$plugin" --quiet 2>/dev/null; then
-            # Then activate separately to avoid user ID issues
-            if wp --allow-root plugin activate "$plugin" --quiet 2>/dev/null; then
-                log_success "Plugin installato: $plugin"
-            else
-                log_warn "Plugin installato ma non attivato: $plugin"
-            fi
-        else
-            log_warn "Errore installazione plugin: $plugin"
-        fi
+        install_plugin_with_fallback "$plugin"
     done
 
     # Configure all essential plugins

@@ -216,7 +216,7 @@ fix_plugin_installation() {
 
     cd "$WP_PATH"
 
-    # Lista plugin essenziali
+    # Lista plugin essenziali con nomi corretti
     local plugins=(
         "wordfence"
         "wp-optimize"
@@ -226,7 +226,7 @@ fix_plugin_installation() {
         "wordpress-seo"
         "wp-super-cache"
         "autoptimize"
-        "smush"
+        "wp-smushit"
         "broken-link-checker"
         "google-analytics-dashboard-for-wp"
         "cookie-law-info"
@@ -248,15 +248,45 @@ fix_plugin_installation() {
                 log_info "Plugin già attivo: $plugin"
             fi
         else
-            # Installa il plugin
-            if wp --allow-root plugin install "$plugin" --quiet 2>/dev/null; then
-                if wp --allow-root plugin activate "$plugin" --quiet 2>/dev/null; then
-                    log_success "Plugin installato e attivato: $plugin"
-                else
-                    log_warn "Plugin installato ma non attivato: $plugin"
+            # Installa il plugin con retry e fallback
+            local installed=false
+            local attempts=3
+
+            # Tentativo installazione principale
+            for ((i=1; i<=attempts; i++)); do
+                if wp --allow-root plugin install "$plugin" --quiet 2>/dev/null; then
+                    if wp --allow-root plugin activate "$plugin" --quiet 2>/dev/null; then
+                        log_success "Plugin installato e attivato: $plugin"
+                        installed=true
+                        break
+                    else
+                        log_warn "Plugin installato ma non attivato: $plugin"
+                        installed=true
+                        break
+                    fi
                 fi
-            else
-                log_warn "Errore installazione plugin: $plugin"
+
+                if [ $i -lt $attempts ]; then
+                    log_info "Retry $i/$attempts per $plugin..."
+                    sleep 2
+                fi
+            done
+
+            # Fallback per plugin con nomi alternativi
+            if [ "$installed" = false ]; then
+                case "$plugin" in
+                    "wp-smushit")
+                        log_info "Tentativo fallback: smush"
+                        if wp --allow-root plugin install "smush" --activate --quiet 2>/dev/null; then
+                            log_success "Plugin fallback installato: smush"
+                        else
+                            log_warn "Errore installazione plugin: $plugin (e fallback)"
+                        fi
+                        ;;
+                    *)
+                        log_warn "Errore installazione plugin: $plugin"
+                        ;;
+                esac
             fi
         fi
     done
