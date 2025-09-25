@@ -635,46 +635,30 @@ configure_wpcli_for_lxc() {
     cat > /root/.wp-cli/config.yml << 'EOF'
 # WP-CLI configuration for LXC container
 # This configuration allows safe root operation in containerized environments
-user: root
 path: /var/www
 apache_modules:
   - mod_rewrite
 disabled_commands: []
 
-# LXC Container specific settings
-core config:
-  allow_root: true
-  skip_checks: ["root"]
-
 # Suppress warnings for containerized environments
-quiet: true
-color: false
+quiet: false
+color: true
 EOF
 
-    # Create a helper script to manage WP-CLI in LXC environment
+    # Create a minimal helper script for file permissions
     cat > /usr/local/bin/wp-cli-lxc-helper.php << 'EOF'
 <?php
 /**
- * WP-CLI LXC Container Helper
- * Automatically configures WP-CLI to work properly in LXC containers
+ * WP-CLI LXC Container Helper - Minimal version
+ * Handles basic file permissions in LXC container
  */
 
-// Set appropriate file permissions for web server
-if (function_exists('WP_CLI')) {
-    WP_CLI::add_hook('before_wp_load', function() {
-        // Ensure proper ownership of WordPress files
-        $wp_path = ABSPATH ?? getcwd();
-        if (is_dir($wp_path) && function_exists('exec')) {
-            exec("chown -R www-data:www-data " . escapeshellarg($wp_path) . " 2>/dev/null");
-        }
-    });
-
+// Only run if WP-CLI is available and WordPress is loaded
+if (defined('WP_CLI') && WP_CLI && function_exists('get_option')) {
+    // Simple hook to ensure proper file ownership after major operations
     WP_CLI::add_hook('after_wp_config_create', function() {
-        // Set proper permissions after wp-config creation
         if (file_exists('wp-config.php')) {
             chmod('wp-config.php', 0644);
-            chown('wp-config.php', 'www-data');
-            chgrp('wp-config.php', 'www-data');
         }
     });
 }
@@ -692,6 +676,22 @@ EOF
     export WP_CLI_ALLOW_ROOT=1
 
     log_success "WP-CLI configurato per ambiente LXC"
+}
+
+# Get WordPress admin user for plugin configurations
+get_wp_admin_user() {
+    local admin_user
+    # Try to get the first administrator user
+    admin_user=$(wp --allow-root user list --role=administrator --field=user_login --format=csv --quiet 2>/dev/null | head -1)
+
+    if [[ -n "$admin_user" ]]; then
+        echo "$admin_user"
+        return 0
+    else
+        # Fallback to the username used during installation
+        echo "${WP_ADMIN_USER:-admin}"
+        return 1
+    fi
 }
 
 test_database_connection() {
@@ -928,10 +928,29 @@ install_essential_plugins() {
         plugins+=("wp-mail-smtp")
     fi
 
+    # Verify WordPress admin user exists before plugin installation
+    local admin_user
+    admin_user=$(get_wp_admin_user)
+    if [[ -z "$admin_user" ]]; then
+        log_warn "Nessun utente amministratore trovato. Creazione utente admin..."
+        # Create admin user if missing
+        wp --allow-root user create "${WP_ADMIN_USER:-admin}" "${WP_ADMIN_EMAIL:-admin@example.com}" \
+            --role=administrator --user_pass="${WP_ADMIN_PASS:-password}" --quiet 2>/dev/null || true
+        admin_user="${WP_ADMIN_USER:-admin}"
+    fi
+
+    log_info "Utilizzando utente amministratore: $admin_user"
+
     # Install and activate plugins
     for plugin in "${plugins[@]}"; do
-        if wp --allow-root plugin install "$plugin" --activate; then
-            log_success "Plugin installato: $plugin"
+        # First install without activation
+        if wp --allow-root plugin install "$plugin" --quiet 2>/dev/null; then
+            # Then activate separately to avoid user ID issues
+            if wp --allow-root plugin activate "$plugin" --quiet 2>/dev/null; then
+                log_success "Plugin installato: $plugin"
+            else
+                log_warn "Plugin installato ma non attivato: $plugin"
+            fi
         else
             log_warn "Errore installazione plugin: $plugin"
         fi
