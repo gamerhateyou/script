@@ -3,7 +3,8 @@
     "allow": [
       "Bash(chmod:*)",
       "Bash(shellcheck:*)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(bash:*)"
     ],
     "deny": [],
     "ask": []

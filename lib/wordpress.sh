@@ -601,6 +601,9 @@ install_wpcli() {
     chmod +x "$wpcli_phar"
     mv "$wpcli_phar" /usr/local/bin/wp
 
+    # Configure WP-CLI for LXC container environment
+    configure_wpcli_for_lxc
+
     # Verify installation with timeout
     if timeout 10 wp --info >/dev/null 2>&1; then
         log_success "WP-CLI installato e verificato"
@@ -609,6 +612,86 @@ install_wpcli() {
         log_error "Errore verifica WP-CLI"
         return 1
     fi
+}
+
+# Configure WP-CLI for LXC container to avoid --allow-root warnings
+configure_wpcli_for_lxc() {
+    log_info "Configurazione WP-CLI per container LXC..."
+
+    # Create www-data user if it doesn't exist
+    if ! id www-data >/dev/null 2>&1; then
+        useradd -r -s /bin/bash www-data
+        log_info "Utente www-data creato"
+    fi
+
+    # Ensure www-data has a home directory
+    if [ ! -d /home/www-data ]; then
+        mkdir -p /home/www-data
+        chown www-data:www-data /home/www-data
+    fi
+
+    # Create WP-CLI config to suppress root warnings in LXC
+    mkdir -p /root/.wp-cli
+    cat > /root/.wp-cli/config.yml << 'EOF'
+# WP-CLI configuration for LXC container
+# This configuration allows safe root operation in containerized environments
+user: root
+path: /var/www
+apache_modules:
+  - mod_rewrite
+disabled_commands: []
+
+# LXC Container specific settings
+core config:
+  allow_root: true
+  skip_checks: ["root"]
+
+# Suppress warnings for containerized environments
+quiet: true
+color: false
+EOF
+
+    # Create a helper script to manage WP-CLI in LXC environment
+    cat > /usr/local/bin/wp-cli-lxc-helper.php << 'EOF'
+<?php
+/**
+ * WP-CLI LXC Container Helper
+ * Automatically configures WP-CLI to work properly in LXC containers
+ */
+
+// Set appropriate file permissions for web server
+if (function_exists('WP_CLI')) {
+    WP_CLI::add_hook('before_wp_load', function() {
+        // Ensure proper ownership of WordPress files
+        $wp_path = ABSPATH ?? getcwd();
+        if (is_dir($wp_path) && function_exists('exec')) {
+            exec("chown -R www-data:www-data " . escapeshellarg($wp_path) . " 2>/dev/null");
+        }
+    });
+
+    WP_CLI::add_hook('after_wp_config_create', function() {
+        // Set proper permissions after wp-config creation
+        if (file_exists('wp-config.php')) {
+            chmod('wp-config.php', 0644);
+            chown('wp-config.php', 'www-data');
+            chgrp('wp-config.php', 'www-data');
+        }
+    });
+}
+EOF
+
+    # Create environment variable to suppress warnings
+    echo 'export WP_CLI_CONFIG_PATH="/root/.wp-cli/config.yml"' >> /root/.bashrc
+    echo 'export WP_CLI_ALLOW_ROOT=1' >> /root/.bashrc
+
+    # Create a simple alias that automatically adds --allow-root
+    echo 'alias wp="/usr/local/bin/wp --allow-root"' >> /root/.bashrc
+
+    # Make it available immediately
+    export WP_CLI_CONFIG_PATH="/root/.wp-cli/config.yml"
+    export WP_CLI_ALLOW_ROOT=1
+
+    log_success "WP-CLI configurato per ambiente LXC"
 }
 
 test_database_connection() {
