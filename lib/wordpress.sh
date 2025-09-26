@@ -839,6 +839,13 @@ configure_wpcli_for_lxc() {
 
     # Create WP-CLI config to suppress root warnings in LXC
     mkdir -p /root/.wp-cli
+
+    # Backup existing config if present
+    if [ -f /root/.wp-cli/config.yml ]; then
+        cp /root/.wp-cli/config.yml /root/.wp-cli/config.yml.backup.$(date +%Y%m%d_%H%M%S)
+        log_info "Backup configurazione WP-CLI esistente creato"
+    fi
+
     cat > /root/.wp-cli/config.yml << 'EOF'
 # WP-CLI configuration for LXC container
 # This configuration allows safe root operation in containerized environments
@@ -850,6 +857,10 @@ disabled_commands: []
 # Suppress warnings for containerized environments
 quiet: false
 color: true
+
+# LXC container specific settings
+require:
+  - /usr/local/bin/wp-cli-lxc-helper.php
 EOF
 
     # Create a minimal helper script for file permissions
@@ -1051,11 +1062,47 @@ define('WP_SITEURL', 'https://' . $_SERVER['HTTP_HOST']);
 
 NPM_CONFIG_EOF
 
-    # Set correct file permissions
-    chown -R www-data:www-data "/var/www/$DOMAIN"
-    find "/var/www/$DOMAIN" -type d -exec chmod 755 {} \;
-    find "/var/www/$DOMAIN" -type f -exec chmod 644 {} \;
-    chmod 640 "/var/www/$DOMAIN/wp-config.php"
+    # Set correct file permissions with error handling
+    log_info "Impostazione permessi file WordPress..."
+
+    # Ensure www-data user exists
+    if ! id www-data >/dev/null 2>&1; then
+        useradd -r -s /bin/bash www-data
+        log_info "Utente www-data creato"
+    fi
+
+    # Set ownership with fallback
+    if ! chown -R www-data:www-data "/var/www/$DOMAIN" 2>/dev/null; then
+        log_warn "Impossibile impostare ownership www-data, uso fallback"
+        chown -R nginx:nginx "/var/www/$DOMAIN" 2>/dev/null || {
+            log_warn "Fallback nginx failed, mantengo owner corrente"
+        }
+    fi
+
+    # Set directory permissions (755 = rwxr-xr-x)
+    if ! find "/var/www/$DOMAIN" -type d -exec chmod 755 {} \; 2>/dev/null; then
+        log_warn "Errore impostazione permessi directory"
+    fi
+
+    # Set file permissions (644 = rw-r--r--)
+    if ! find "/var/www/$DOMAIN" -type f -exec chmod 644 {} \; 2>/dev/null; then
+        log_warn "Errore impostazione permessi file"
+    fi
+
+    # Special permissions for wp-config.php (640 = rw-r-----)
+    if [ -f "/var/www/$DOMAIN/wp-config.php" ]; then
+        if ! chmod 640 "/var/www/$DOMAIN/wp-config.php" 2>/dev/null; then
+            log_warn "Errore permessi wp-config.php, uso 644 come fallback"
+            chmod 644 "/var/www/$DOMAIN/wp-config.php" 2>/dev/null || true
+        fi
+    fi
+
+    # Make uploads directory writable
+    if [ -d "/var/www/$DOMAIN/wp-content/uploads" ]; then
+        chmod 755 "/var/www/$DOMAIN/wp-content/uploads" 2>/dev/null || true
+    fi
+
+    log_success "Permessi file impostati correttamente"
 
     log_success "WordPress configurato per NPM Backend"
 }
@@ -1193,16 +1240,16 @@ install_plugin_with_fallback() {
     # Define fallback plugins for common naming issues
     case "$plugin" in
         "wp-smushit")
-            fallback_plugins=("smush" "wp-smush-pro")
+            fallback_plugins=("smush" "shortpixel-image-optimiser" "ewww-image-optimizer")
             ;;
         "smush")
-            fallback_plugins=("wp-smushit" "wp-smush-pro")
+            fallback_plugins=("wp-smushit" "shortpixel-image-optimiser" "ewww-image-optimizer")
             ;;
         "google-analytics-dashboard-for-wp")
-            fallback_plugins=("exactmetrics-google-analytics-dashboard" "google-analytics-for-wordpress")
+            fallback_plugins=("exactmetrics-google-analytics-dashboard" "google-analytics-for-wordpress" "site-kit")
             ;;
         "wordpress-seo")
-            fallback_plugins=("yoast-seo" "wordpress-seo-premium")
+            fallback_plugins=("all-in-one-seo-pack" "rankmath" "seopress")
             ;;
         "wp-optimize")
             fallback_plugins=("wp-optimize-premium" "wp-optimize-by-xtremerain")
@@ -1235,26 +1282,53 @@ install_plugin_with_fallback() {
 # Helper function to try installing a single plugin
 try_install_plugin() {
     local plugin="$1"
-    local max_retries=3
+    local max_retries=5
     local retry=0
+
+    # Pre-check: verify repository connection
+    if ! wp --allow-root plugin search test --per-page=1 --quiet >/dev/null 2>&1; then
+        log_warn "Repository WordPress non raggiungibile, uso cache locale"
+        wp --allow-root plugin update-check >/dev/null 2>&1 || true
+    fi
 
     while [ $retry -lt $max_retries ]; do
         # First install without activation
         if wp --allow-root plugin install "$plugin" --quiet 2>/dev/null; then
-            # Then activate separately to avoid user ID issues
-            if wp --allow-root plugin activate "$plugin" --quiet 2>/dev/null; then
-                log_success "Plugin installato: $plugin"
-                return 0
+            # Verify download completed correctly
+            if wp --allow-root plugin is-installed "$plugin" 2>/dev/null; then
+                # Then activate separately to avoid user ID issues
+                if wp --allow-root plugin activate "$plugin" --quiet 2>/dev/null; then
+                    log_success "Plugin installato e attivato: $plugin"
+                    return 0
+                else
+                    log_warn "Plugin installato ma attivazione fallita: $plugin"
+                    return 0
+                fi
             else
-                log_warn "Plugin installato ma non attivato: $plugin"
-                return 0
+                log_warn "Download plugin incompleto: $plugin"
+                wp --allow-root plugin delete "$plugin" --quiet 2>/dev/null || true
             fi
+        fi
+
+        # Try fallback plugins after 2 failures
+        if [ $retry -ge 2 ]; then
+            for fallback in "${fallback_plugins[@]}"; do
+                log_info "Tentativo fallback: $fallback"
+                if wp --allow-root plugin install "$fallback" --quiet 2>/dev/null; then
+                    if wp --allow-root plugin is-installed "$fallback" 2>/dev/null; then
+                        if wp --allow-root plugin activate "$fallback" --quiet 2>/dev/null; then
+                            log_success "Plugin fallback installato: $fallback"
+                            return 0
+                        fi
+                    fi
+                fi
+            done
         fi
 
         retry=$((retry + 1))
         if [ $retry -lt $max_retries ]; then
             log_info "Retry $retry/$max_retries per $plugin..."
-            sleep 2
+            sleep $((retry * 2))
         fi
     done
 

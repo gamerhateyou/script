@@ -279,6 +279,8 @@ fix_plugin_installation() {
                         log_info "Tentativo fallback: smush"
                         if wp --allow-root plugin install "smush" --activate --quiet 2>/dev/null; then
                             log_success "Plugin fallback installato: smush"
+                        elif wp --allow-root plugin install "shortpixel-image-optimiser" --activate --quiet 2>/dev/null; then
+                            log_success "Plugin alternativo installato: shortpixel-image-optimiser"
                         else
                             log_warn "Errore installazione plugin: $plugin (e fallback)"
                         fi
@@ -314,10 +316,47 @@ run_wordpress_optimization() {
     # Update database
     wp --allow-root core update-db --quiet 2>/dev/null || true
 
-    # Fix file permissions
-    chown -R www-data:www-data "$WP_PATH" 2>/dev/null || true
-    find "$WP_PATH" -type d -exec chmod 755 {} \; 2>/dev/null || true
-    find "$WP_PATH" -type f -exec chmod 644 {} \; 2>/dev/null || true
+    # Fix file permissions with better error handling
+    log_info "Correzione permessi file WordPress..."
+
+    # Ensure www-data user exists
+    if ! id www-data >/dev/null 2>&1; then
+        useradd -r -s /bin/bash www-data 2>/dev/null || true
+        log_info "Utente www-data creato"
+    fi
+
+    # Fix ownership with fallback
+    if ! chown -R www-data:www-data "$WP_PATH" 2>/dev/null; then
+        log_warn "Impossibile impostare ownership www-data, provo nginx"
+        chown -R nginx:nginx "$WP_PATH" 2>/dev/null || {
+            log_warn "Fallback nginx failed, mantengo owner corrente"
+        }
+    fi
+
+    # Set directory permissions
+    if ! find "$WP_PATH" -type d -exec chmod 755 {} \; 2>/dev/null; then
+        log_warn "Errore impostazione permessi directory"
+    fi
+
+    # Set file permissions
+    if ! find "$WP_PATH" -type f -exec chmod 644 {} \; 2>/dev/null; then
+        log_warn "Errore impostazione permessi file"
+    fi
+
+    # Special permissions for sensitive files
+    if [ -f "$WP_PATH/wp-config.php" ]; then
+        chmod 640 "$WP_PATH/wp-config.php" 2>/dev/null || {
+            log_warn "Errore permessi wp-config.php, uso 644"
+            chmod 644 "$WP_PATH/wp-config.php" 2>/dev/null || true
+        }
+    fi
+
+    # Make uploads writable
+    if [ -d "$WP_PATH/wp-content/uploads" ]; then
+        chmod 755 "$WP_PATH/wp-content/uploads" 2>/dev/null || true
+    fi
+
+    log_success "Permessi file corretti"
 
     log_success "Ottimizzazioni applicate"
 }
