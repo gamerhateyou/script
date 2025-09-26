@@ -942,7 +942,7 @@ install_wordpress() {
     }
 
     # Download WordPress
-    if ! wp --allow-root core download --locale="$WP_LOCALE"; then
+    if ! wp --allow-root core download --locale="$WP_LOCALE" --path="$wp_dir"; then
         log_error "Errore download WordPress"
         return 1
     fi
@@ -965,20 +965,21 @@ install_wordpress() {
         --dbuser="$DB_USER" \
         --dbpass="$DB_PASS" \
         --dbhost="$DB_HOST" \
-        --dbprefix="$db_prefix" || {
+        --dbprefix="$db_prefix" \
+        --path="$wp_dir" || {
         log_error "Errore creazione wp-config.php"
         log_error "Directory corrente durante errore: $(pwd)"
         return 1
     }
 
     # Verify wp-config.php was created before fixing permissions
-    if [[ -f "wp-config.php" ]]; then
+    if [[ -f "$wp_dir/wp-config.php" ]]; then
         # Fix permissions after wp-config creation
-        chown www-data:www-data "wp-config.php"
-        chmod 640 "wp-config.php"
+        chown www-data:www-data "$wp_dir/wp-config.php"
+        chmod 640 "$wp_dir/wp-config.php"
         log_info "Permessi wp-config.php aggiornati"
     else
-        log_error "wp-config.php non trovato dopo la creazione in: $(pwd)/wp-config.php"
+        log_error "wp-config.php non trovato dopo la creazione in: $wp_dir/wp-config.php"
         # List directory contents for debugging
         log_info "Contenuto directory $wp_dir:"
         ls -la "$wp_dir/" || log_error "Impossibile elencare contenuto directory"
