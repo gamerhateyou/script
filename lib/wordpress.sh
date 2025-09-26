@@ -986,7 +986,7 @@ install_wordpress() {
         return 1
     fi
 
-    configure_wordpress_advanced
+    configure_wordpress_advanced "$wp_dir"
 
     # Install WordPress with appropriate URL
     local wp_url="http://$DOMAIN"
@@ -1003,7 +1003,8 @@ install_wordpress() {
         --admin_user="$WP_ADMIN_USER" \
         --admin_password="$WP_ADMIN_PASS" \
         --admin_email="$WP_ADMIN_EMAIL" \
-        --skip-email || {
+        --skip-email \
+        --path="$wp_dir" || {
         log_error "Errore installazione WordPress"
         return 1
     }
@@ -1109,10 +1110,11 @@ NPM_CONFIG_EOF
 }
 
 configure_wordpress_advanced() {
+    local wp_dir="$1"
     log_step "Configurazione avanzata WordPress..."
 
     # Add advanced configurations to wp-config.php
-    cat >> wp-config.php << EOF
+    cat >> "$wp_dir/wp-config.php" << EOF
 
 /* WordPress Security Settings - September 2025 */
 define('DISALLOW_FILE_EDIT', true);
@@ -1161,11 +1163,11 @@ define('WP_AUTO_UPDATE_CORE', 'minor');
 EOF
 
     # Generate and add security salts
-    wp --allow-root config shuffle-salts
+    wp --allow-root config shuffle-salts --path="$wp_dir"
 
     # Redis configuration if available
     if [[ "${USE_REDIS:-}" == "y"* ]] || [[ "${USE_REDIS,,}" =~ ^(yes|s|si)$ ]]; then
-        cat >> wp-config.php << EOF
+        cat >> "$wp_dir/wp-config.php" << EOF
 
 /* Redis Object Cache Configuration */
 define('WP_REDIS_HOST', '${REDIS_HOST}');
