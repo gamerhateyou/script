@@ -453,11 +453,31 @@ EOF
 install_wp_cli() {
     log_info "Installazione WP-CLI..."
 
-    curl -O https://raw.githubusercontent.com/wp-cli/wp-cli/master/utils/wp-cli.phar
-    chmod +x wp-cli.phar
-    mv wp-cli.phar /usr/local/bin/wp
+    # Rimuovi eventuali versioni precedenti
+    rm -f /usr/local/bin/wp wp-cli.phar
 
-    log_success "WP-CLI installato"
+    # Download WP-CLI con verifiche (URL ufficiale)
+    if curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar; then
+        # Verifica che il file sia stato scaricato correttamente
+        if [ -s wp-cli.phar ] && file wp-cli.phar | grep -q "PHP script"; then
+            chmod +x wp-cli.phar
+            mv wp-cli.phar /usr/local/bin/wp
+
+            # Test WP-CLI
+            if /usr/local/bin/wp --info &>/dev/null; then
+                log_success "WP-CLI installato e funzionante"
+            else
+                log_error "WP-CLI installato ma non funziona correttamente"
+                exit 1
+            fi
+        else
+            log_error "Download WP-CLI fallito o file corrotto"
+            exit 1
+        fi
+    else
+        log_error "Impossibile scaricare WP-CLI"
+        exit 1
+    fi
 }
 
 # Configurazione iniziale WordPress via WP-CLI
