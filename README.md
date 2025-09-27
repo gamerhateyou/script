@@ -13,7 +13,7 @@ Il container WordPress si connette a **tre servizi esterni**:
 ## Servizi installati nel container
 
 - **Nginx** - Web server ottimizzato
-- **PHP 8.2-FPM** - Con OPcache e ottimizzazioni
+- **PHP 8.3-FPM** - Con JIT OPcache e ottimizzazioni 2025
 - **WordPress** - Ultima versione
 - **WP-CLI** - Command line interface
 - **Plugin essenziali** - Cache, SEO, sicurezza
@@ -138,7 +138,7 @@ Lo script esegue test automatici di:
 
 **Servizi locali:**
 - Nginx: `systemctl status nginx`
-- PHP-FPM: `systemctl status php8.2-fpm`
+- PHP-FPM: `systemctl status php8.3-fpm`
 
 **Connessioni esterne:**
 - Database: `mysql -h HOST -P PORT -u USER -p`
@@ -174,7 +174,7 @@ Lo script esegue test automatici di:
 
 - **WordPress**: `/var/www/html/wp-config.php`
 - **Nginx**: `/etc/nginx/sites-available/wordpress`
-- **PHP**: `/etc/php/8.2/fpm/conf.d/99-wordpress.ini`
+- **PHP**: `/etc/php/8.3/fpm/conf.d/99-wordpress-2025.ini`
 - **Backup**: `/opt/backup/wordpress-backup.sh`
 
 ## Sicurezza

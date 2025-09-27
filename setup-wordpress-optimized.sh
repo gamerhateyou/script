@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# WordPress Optimized Setup Script for Proxmox Container
-# Configura WordPress con Redis, MinIO, ottimizzazioni SEO e performance
+# WordPress Optimized Setup Script for Proxmox Container 2025
+# Configura WordPress con PHP 8.3, Redis, MinIO, ottimizzazioni SEO e performance
 
 set -e
 
@@ -30,13 +30,17 @@ log_error() {
 }
 
 # Configurazione predefinita
+DEFAULT_DB_HOST="mysql.local"
 DEFAULT_DB_NAME="wordpress"
 DEFAULT_DB_USER="wpuser"
 DEFAULT_DB_PORT="3306"
 DEFAULT_WP_ADMIN="admin"
 DEFAULT_SITE_TITLE="WordPress Ottimizzato"
-DEFAULT_REDIS_HOST=""
+DEFAULT_REDIS_HOST="redis.local"
 DEFAULT_REDIS_PORT="6379"
+DEFAULT_MINIO_HOST="minio.local"
+DEFAULT_MINIO_PORT="9000"
+DEFAULT_MINIO_BUCKET="wordpress-media"
 
 # Funzione per input utente con default
 read_input() {
@@ -80,7 +84,7 @@ collect_config() {
 
     # Database esterno
     log_info "Configurazione Database MySQL/MariaDB esterno:"
-    read_input "Host database" "" "DB_HOST"
+    read_input "Host database" "$DEFAULT_DB_HOST" "DB_HOST"
     read_input "Porta database" "$DEFAULT_DB_PORT" "DB_PORT"
     read_input "Nome database" "$DEFAULT_DB_NAME" "DB_NAME"
     read_input "Utente database" "$DEFAULT_DB_USER" "DB_USER"
@@ -104,11 +108,11 @@ collect_config() {
 
     # MinIO
     log_info "Configurazione MinIO:"
-    read_input "Host MinIO" "" "MINIO_HOST"
-    read_input "Porta MinIO" "9000" "MINIO_PORT"
+    read_input "Host MinIO" "$DEFAULT_MINIO_HOST" "MINIO_HOST"
+    read_input "Porta MinIO" "$DEFAULT_MINIO_PORT" "MINIO_PORT"
     read_input "Username MinIO" "" "MINIO_USER"
     read_password "Password MinIO" "MINIO_PASSWORD"
-    read_input "Nome bucket" "wordpress-media" "MINIO_BUCKET"
+    read_input "Nome bucket" "$DEFAULT_MINIO_BUCKET" "MINIO_BUCKET"
     echo
 }
 
@@ -119,24 +123,27 @@ update_system() {
     log_success "Sistema aggiornato"
 }
 
-# Installazione pacchetti base
+# Installazione pacchetti base PHP 8.3
 install_base_packages() {
-    log_info "Installazione pacchetti base..."
+    log_info "Installazione pacchetti base PHP 8.3..."
     apt install -y \
         nginx \
-        php8.2-fpm \
-        php8.2-mysql \
-        php8.2-redis \
-        php8.2-curl \
-        php8.2-gd \
-        php8.2-intl \
-        php8.2-mbstring \
-        php8.2-soap \
-        php8.2-xml \
-        php8.2-xmlrpc \
-        php8.2-zip \
-        php8.2-imagick \
-        php8.2-cli \
+        nginx-module-brotli \
+        php8.3-fpm \
+        php8.3-mysql \
+        php8.3-redis \
+        php8.3-curl \
+        php8.3-gd \
+        php8.3-intl \
+        php8.3-mbstring \
+        php8.3-soap \
+        php8.3-xml \
+        php8.3-xmlrpc \
+        php8.3-zip \
+        php8.3-imagick \
+        php8.3-cli \
+        php8.3-bcmath \
+        php8.3-opcache \
         mysql-client \
         redis-tools \
         wget \
@@ -146,9 +153,11 @@ install_base_packages() {
         python3-certbot-nginx \
         htop \
         nano \
-        git
+        git \
+        imagemagick \
+        webp
 
-    log_success "Pacchetti base installati"
+    log_success "Pacchetti PHP 8.3 installati"
 }
 
 # Configurazione MySQL/MariaDB
@@ -267,11 +276,16 @@ define('COMPRESS_SCRIPTS', true);
 define('CONCATENATE_SCRIPTS', true);
 define('ENFORCE_GZIP', true);
 
-// WordPress Security
+// WordPress Security 2025
 define('DISALLOW_FILE_EDIT', true);
 define('DISALLOW_FILE_MODS', true);
 define('FORCE_SSL_ADMIN', true);
 define('WP_AUTO_UPDATE_CORE', 'minor');
+define('AUTOMATIC_UPDATER_DISABLED', false);
+define('WP_HTTP_BLOCK_EXTERNAL', false);
+define('WP_ACCESSIBLE_HOSTS', '$REDIS_HOST,$DB_HOST,$MINIO_HOST');
+define('COOKIE_DOMAIN', '.$SITE_URL');
+define('COOKIEHASH', md5('$SITE_URL'));
 
 // Debug (disable in production)
 define('WP_DEBUG', false);
@@ -321,42 +335,62 @@ setup_wordpress_cli() {
     log_success "WordPress inizializzato"
 }
 
-# Installazione plugin essenziali
+# Installazione plugin essenziali ottimizzati 2025
 install_plugins() {
-    log_info "Installazione plugin essenziali..."
+    log_info "Installazione plugin essenziali WordPress 2025..."
 
     cd /var/www/html
 
-    # Plugin per cache e performance
+    # Plugin per cache e performance (solo Redis, no conflitti)
     sudo -u www-data wp plugin install redis-cache --activate
-    sudo -u www-data wp plugin install w3-total-cache --activate
-    sudo -u www-data wp plugin install wp-rocket --activate || log_warning "WP Rocket richiede licenza"
+    log_info "Redis Cache: installato e attivato"
 
-    # Plugin per SEO
+    # Plugin per SEO (scegli uno solo per evitare conflitti)
     sudo -u www-data wp plugin install wordpress-seo --activate
-    sudo -u www-data wp plugin install rankmath --activate
+    log_info "Yoast SEO: installato e attivato"
 
-    # Plugin per sicurezza
+    # Plugin per sicurezza essenziali
     sudo -u www-data wp plugin install wordfence --activate
     sudo -u www-data wp plugin install wp-security-audit-log --activate
+    log_info "Plugin sicurezza: installati"
 
     # Plugin per MinIO/S3
     sudo -u www-data wp plugin install amazon-s3-and-cloudfront --activate
+    log_info "S3 Plugin: installato per MinIO"
 
-    # Plugin per performance
+    # Plugin per ottimizzazione immagini e performance
     sudo -u www-data wp plugin install autoptimize --activate
     sudo -u www-data wp plugin install wp-optimize --activate
     sudo -u www-data wp plugin install imagify --activate
+    sudo -u www-data wp plugin install webp-express --activate
+    log_info "Plugin performance: installati"
 
-    # Attivazione cache Redis
+    # Plugin per backup (compatibile con MinIO)
+    sudo -u www-data wp plugin install updraftplus --activate
+    log_info "UpdraftPlus: installato per backup"
+
+    # Configurazione Redis Cache
     sudo -u www-data wp redis enable
+    sudo -u www-data wp config set WP_REDIS_HOST "$REDIS_HOST"
+    sudo -u www-data wp config set WP_REDIS_PORT "$REDIS_PORT"
+    sudo -u www-data wp config set WP_REDIS_DATABASE 0
 
-    log_success "Plugin installati e configurati"
+    # Configurazione base Autoptimize
+    sudo -u www-data wp option update autoptimize_css 1
+    sudo -u www-data wp option update autoptimize_js 1
+    sudo -u www-data wp option update autoptimize_html 1
+    sudo -u www-data wp option update autoptimize_css_defer 1
+
+    log_success "Plugin WordPress 2025 installati e configurati"
 }
 
 # Configurazione Nginx
 setup_nginx() {
     log_info "Configurazione Nginx..."
+
+    # Enable Brotli module
+    echo "load_module modules/ngx_http_brotli_filter_module.so;" > /etc/nginx/modules-enabled/brotli.conf
+    echo "load_module modules/ngx_http_brotli_static_module.so;" >> /etc/nginx/modules-enabled/brotli.conf
 
     cat > /etc/nginx/sites-available/wordpress << EOF
 server {
@@ -365,24 +399,81 @@ server {
     root /var/www/html;
     index index.php index.html index.htm;
 
-    # Security headers
+    # Security headers 2025
     add_header X-Frame-Options "SAMEORIGIN" always;
     add_header X-XSS-Protection "1; mode=block" always;
     add_header X-Content-Type-Options "nosniff" always;
-    add_header Referrer-Policy "no-referrer-when-downgrade" always;
-    add_header Content-Security-Policy "default-src 'self' http: https: data: blob: 'unsafe-inline'" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:" always;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+    add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
 
-    # Gzip compression
+    # Modern compression 2025
     gzip on;
     gzip_vary on;
     gzip_min_length 1024;
-    gzip_proxied expired no-cache no-store private auth;
-    gzip_types text/plain text/css text/xml text/javascript application/x-javascript application/xml+rss;
+    gzip_comp_level 6;
+    gzip_proxied any;
+    gzip_types
+        text/plain
+        text/css
+        text/xml
+        text/javascript
+        text/x-component
+        application/javascript
+        application/x-javascript
+        application/json
+        application/xml
+        application/rss+xml
+        application/atom+xml
+        font/truetype
+        font/opentype
+        application/vnd.ms-fontobject
+        image/svg+xml;
 
-    # Cache static files
-    location ~* \.(jpg|jpeg|png|gif|ico|css|js|woff|woff2|ttf|svg)$ {
+    # Brotli compression (if available)
+    brotli on;
+    brotli_comp_level 6;
+    brotli_types
+        text/plain
+        text/css
+        application/json
+        application/javascript
+        text/xml
+        application/xml
+        application/atom+xml
+        image/svg+xml;
+
+    # Cache static files 2025
+    location ~* \.(jpg|jpeg|png|gif|ico|webp|avif|css|js|woff|woff2|ttf|eot|svg|pdf)$ {
         expires 1y;
         add_header Cache-Control "public, immutable";
+        add_header Vary "Accept-Encoding";
+        access_log off;
+        log_not_found off;
+    }
+
+    # WebP support
+    location ~* \.(png|jpe?g)$ {
+        add_header Vary Accept;
+        try_files $uri$webp_suffix $uri =404;
+    }
+
+    # Rate limiting
+    limit_req_zone \$binary_remote_addr zone=wp_login:10m rate=1r/s;
+    limit_req_zone \$binary_remote_addr zone=wp_admin:10m rate=5r/s;
+
+    # WordPress login protection
+    location = /wp-login.php {
+        limit_req zone=wp_login burst=2 nodelay;
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/var/run/php/php8.3-fpm.sock;
+    }
+
+    # WordPress admin protection
+    location ^~ /wp-admin/ {
+        limit_req zone=wp_admin burst=5 nodelay;
+        try_files \$uri \$uri/ /index.php?\$args;
     }
 
     # WordPress security
@@ -400,7 +491,7 @@ server {
     # PHP processing
     location ~ \.php$ {
         include snippets/fastcgi-php.conf;
-        fastcgi_pass unix:/var/run/php/php8.2-fpm.sock;
+        fastcgi_pass unix:/var/run/php/php8.3-fpm.sock;
         fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
         include fastcgi_params;
 
@@ -432,63 +523,91 @@ EOF
     log_success "Nginx configurato"
 }
 
-# Configurazione PHP-FPM ottimizzata
+# Configurazione PHP 8.3-FPM ottimizzata per WordPress 2025
 optimize_php() {
-    log_info "Ottimizzazione PHP-FPM..."
+    log_info "Ottimizzazione PHP 8.3-FPM per WordPress 2025..."
 
-    # Configurazione PHP-FPM
-    cat > /etc/php/8.2/fpm/pool.d/www.conf << EOF
+    # Configurazione PHP-FPM pool ottimizzata
+    cat > /etc/php/8.3/fpm/pool.d/www.conf << EOF
 [www]
 user = www-data
 group = www-data
-listen = /var/run/php/php8.2-fpm.sock
+listen = /var/run/php/php8.3-fpm.sock
 listen.owner = www-data
 listen.group = www-data
+listen.mode = 0660
 pm = dynamic
-pm.max_children = 50
-pm.start_servers = 5
+pm.max_children = 75
+pm.start_servers = 8
 pm.min_spare_servers = 5
-pm.max_spare_servers = 35
+pm.max_spare_servers = 25
 pm.process_idle_timeout = 10s
-pm.max_requests = 500
+pm.max_requests = 1000
 request_terminate_timeout = 300
-rlimit_files = 1024
+rlimit_files = 65535
 rlimit_core = 0
 catch_workers_output = yes
+php_admin_value[error_log] = /var/log/php8.3-fpm.log
+php_admin_flag[log_errors] = on
 EOF
 
-    # Configurazione PHP ottimizzata
-    cat > /etc/php/8.2/fpm/conf.d/99-wordpress.ini << EOF
-; WordPress optimizations
-memory_limit = 256M
-upload_max_filesize = 64M
-post_max_size = 64M
+    # Configurazione PHP 8.3 ottimizzata per WordPress
+    cat > /etc/php/8.3/fpm/conf.d/99-wordpress-2025.ini << EOF
+; WordPress 2025 optimizations for PHP 8.3
+memory_limit = 1024M
+upload_max_filesize = 512M
+post_max_size = 512M
 max_execution_time = 300
-max_input_vars = 3000
+max_input_vars = 5000
 max_input_time = 300
+max_file_uploads = 20
 
-; OPcache
+; OPcache optimizations for WordPress 2025
 opcache.enable = 1
-opcache.memory_consumption = 128
-opcache.interned_strings_buffer = 8
-opcache.max_accelerated_files = 10000
-opcache.revalidate_freq = 2
-opcache.fast_shutdown = 1
 opcache.enable_cli = 1
+opcache.memory_consumption = 512
+opcache.interned_strings_buffer = 64
+opcache.max_accelerated_files = 32531
+opcache.validate_timestamps = 0
+opcache.save_comments = 1
+opcache.fast_shutdown = 1
+opcache.enable_file_override = 1
+opcache.optimization_level = 0x7FFFBFFF
+opcache.jit = tracing
+opcache.jit_buffer_size = 256M
 
-; Security
+; Security enhancements 2025
 expose_php = Off
 allow_url_fopen = Off
 allow_url_include = Off
-session.cookie_httponly = 1
-session.cookie_secure = 1
+session.cookie_httponly = On
+session.cookie_secure = On
 session.use_strict_mode = 1
+session.cookie_samesite = "Strict"
+
+; Performance enhancements
+realpath_cache_size = 4096K
+realpath_cache_ttl = 600
+
+; Error logging
+log_errors = On
+error_log = /var/log/php_errors.log
+display_errors = Off
+log_errors_max_len = 1024
+
+; Session optimization
+session.save_handler = files
+session.save_path = "/var/www/sessions"
+session.gc_maxlifetime = 7200
+session.gc_probability = 1
+session.gc_divisor = 1000
 EOF
 
-    systemctl restart php8.2-fpm
-    systemctl enable php8.2-fpm
+    # Restart and enable PHP 8.3-FPM
+    systemctl restart php8.3-fpm
+    systemctl enable php8.3-fpm
 
-    log_success "PHP-FPM ottimizzato"
+    log_success "PHP 8.3-FPM ottimizzato per WordPress 2025"
 }
 
 # Test connessione e configurazione MinIO esterno
@@ -616,19 +735,114 @@ cleanup() {
     log_success "Pulizia completata"
 }
 
+# Installazione strumenti monitoring avanzato
+install_monitoring_tools() {
+    log_info "Installazione strumenti monitoring avanzato..."
+
+    # New Relic PHP Agent (opzionale)
+    read -p "Installare New Relic PHP Agent? (y/N): " install_newrelic
+    if [[ $install_newrelic == [yY] ]]; then
+        curl -L https://download.newrelic.com/php_agent/scripts/newrelic-install.sh | bash
+        log_success "New Relic installato"
+    fi
+
+    # Script di monitoraggio WordPress
+    cat > /opt/scripts/wp-monitor.sh << EOF
+#!/bin/bash
+# WordPress monitoring script
+
+LOG_FILE="/var/log/wp-monitor.log"
+DATE=\$(date '+%Y-%m-%d %H:%M:%S')
+
+# Check WordPress response time
+RESPONSE_TIME=\$(curl -o /dev/null -s -w '%{time_total}' http://localhost)
+echo "[\$DATE] Response time: \$RESPONSE_TIME seconds" >> \$LOG_FILE
+
+# Check Redis connection
+if redis-cli -h $REDIS_HOST -p $REDIS_PORT ping > /dev/null 2>&1; then
+    echo "[\$DATE] Redis: OK" >> \$LOG_FILE
+else
+    echo "[\$DATE] Redis: ERROR" >> \$LOG_FILE
+fi
+
+# Check database connection
+if mysql -h $DB_HOST -P $DB_PORT -u $DB_USER -p$DB_PASSWORD -e "SELECT 1;" $DB_NAME > /dev/null 2>&1; then
+    echo "[\$DATE] Database: OK" >> \$LOG_FILE
+else
+    echo "[\$DATE] Database: ERROR" >> \$LOG_FILE
+fi
+
+# Check disk usage
+DISK_USAGE=\$(df / | awk 'NR==2 {print \$5}' | sed 's/%//')
+if [ "\$DISK_USAGE" -gt 80 ]; then
+    echo "[\$DATE] WARNING: Disk usage at \${DISK_USAGE}%" >> \$LOG_FILE
+fi
+
+# Check PHP-FPM processes
+PHP_PROCESSES=\$(ps aux | grep php8.3-fpm | grep -v grep | wc -l)
+echo "[\$DATE] PHP-FPM processes: \$PHP_PROCESSES" >> \$LOG_FILE
+EOF
+
+    chmod +x /opt/scripts/wp-monitor.sh
+
+    # Performance test script
+    cat > /opt/scripts/wp-performance-test.sh << EOF
+#!/bin/bash
+# WordPress performance test
+
+echo "=== WordPress Performance Test ==="
+
+# Test homepage load time
+echo "Testing homepage load time..."
+curl -o /dev/null -s -w "Time: %{time_total}s | Size: %{size_download} bytes | Speed: %{speed_download} bytes/s\n" "http://localhost"
+
+# Test wp-admin load time
+echo "Testing wp-admin load time..."
+curl -o /dev/null -s -w "Time: %{time_total}s | Size: %{size_download} bytes | Speed: %{speed_download} bytes/s\n" "http://localhost/wp-admin/"
+
+# PHP OPcache status
+echo "\nPHP OPcache Status:"
+php -r "if(function_exists('opcache_get_status')){\$status=opcache_get_status();echo 'Enabled: '.var_export(\$status['opcache_enabled'],true).'\\n';echo 'Hit Rate: '.number_format(\$status['opcache_statistics']['opcache_hit_rate'],2).'%\\n';echo 'Memory Usage: '.number_format(\$status['memory_usage']['used_memory']/1024/1024,2).'MB\\n';}else{echo 'OPcache not available\\n';}"
+
+# Redis performance test
+echo "\nRedis Performance Test:"
+redis-cli -h $REDIS_HOST -p $REDIS_PORT --latency-history -i 1 -c 5 2>/dev/null || echo "Redis non raggiungibile"
+EOF
+
+    chmod +x /opt/scripts/wp-performance-test.sh
+
+    # Add monitoring cron job
+    (crontab -l 2>/dev/null; echo "*/5 * * * * /opt/scripts/wp-monitor.sh") | crontab -
+
+    log_success "Strumenti monitoring installati"
+}
+
 # Test finale
 final_test() {
     log_info "Test finale del sistema..."
 
     # Test servizi
     systemctl is-active --quiet nginx && log_success "Nginx: OK" || log_error "Nginx: ERRORE"
-    systemctl is-active --quiet php8.2-fpm && log_success "PHP-FPM: OK" || log_error "PHP-FPM: ERRORE"
+    systemctl is-active --quiet php8.3-fpm && log_success "PHP-FPM: OK" || log_error "PHP-FPM: ERRORE"
 
     # Test connessione database esterno
     mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" -e "SELECT 1;" "$DB_NAME" &>/dev/null && log_success "Database: OK" || log_error "Database: ERRORE"
 
     # Test Redis esterno
     redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ping &>/dev/null && log_success "Redis ping: OK" || log_error "Redis ping: ERRORE"
+
+    # Test WordPress specifici
+    if curl -s -o /dev/null -w "%{http_code}" "http://localhost" | grep -q "200"; then
+        log_success "WordPress HTTP: OK"
+    else
+        log_error "WordPress HTTP: ERRORE"
+    fi
+
+    # Test PHP OPcache
+    php -v | grep -q "with Zend OPcache" && log_success "PHP OPcache: OK" || log_error "PHP OPcache: ERRORE"
+
+    # Test PHP JIT
+    php -v | grep -q "JIT" && log_success "PHP JIT: OK" || log_warning "PHP JIT: Non rilevato"
 
     log_success "Test completati"
 }
@@ -681,11 +895,15 @@ main() {
     optimize_php
     system_optimizations
     setup_backup
+    install_monitoring_tools
 
-    # SSL opzionale
-    read -p "Configurare SSL con Let's Encrypt? (y/N): " ssl_confirm
+    # SSL opzionale (solo se NON si usa Nginx Proxy Manager)
+    log_info "NOTA: Se usi Nginx Proxy Manager, configura SSL tramite il proxy manager"
+    read -p "Configurare SSL direttamente su questo container con Let's Encrypt? (y/N): " ssl_confirm
     if [[ $ssl_confirm == [yY] ]]; then
         setup_ssl
+    else
+        log_info "SSL saltato - configurazione tramite Nginx Proxy Manager"
     fi
 
     cleanup
@@ -702,12 +920,18 @@ main() {
     echo "- Redis Cache: $REDIS_HOST:$REDIS_PORT"
     echo "- MinIO S3: $MINIO_HOST:$MINIO_PORT"
     echo
+    log_info "Strumenti disponibili:"
+    echo "- Performance test: /opt/scripts/wp-performance-test.sh"
+    echo "- Monitoring log: tail -f /var/log/wp-monitor.log"
+    echo "- Test connessioni: /opt/scripts/test-redis-connection.sh && /opt/scripts/test-mysql-connection.sh"
+    echo
     log_info "Prossimi passi:"
-    echo "1. Configura i plugin installati"
+    echo "1. Configura i plugin installati (Yoast SEO, Wordfence, etc.)"
     echo "2. Personalizza il tema"
     echo "3. Verifica configurazione MinIO S3 nel plugin"
-    echo "4. Testa la cache Redis"
-    echo "5. Verifica le performance"
+    echo "4. Testa la cache Redis con WP-CLI"
+    echo "5. Esegui test performance: /opt/scripts/wp-performance-test.sh"
+    echo "6. Configura Nginx Proxy Manager per SSL e dominio"
     echo
 }
 
