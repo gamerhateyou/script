@@ -277,8 +277,8 @@ define('AS3CF_SETTINGS', serialize(array(
     'cloudfront' => '',
     'object-prefix' => '',
     'use-server-roles' => false,
-    'endpoint' => '$MINIO_HOST:$MINIO_PORT',
-    'use-ssl' => false,
+    'endpoint' => '$CLEAN_MINIO_HOST:$MINIO_PORT',
+    'use-ssl' => $([ "$MINIO_PROTOCOL" == "https" ] && echo "true" || echo "false"),
 )));
 
 // Security keys (generate these!)
@@ -533,8 +533,18 @@ test_minio_connection() {
     wget https://dl.min.io/client/mc/release/linux-amd64/mc -O /usr/local/bin/mc
     chmod +x /usr/local/bin/mc
 
+    # Pulisci URL MinIO se contiene protocollo
+    CLEAN_MINIO_HOST=$(echo "$MINIO_HOST" | sed 's|https\?://||')
+
+    # Determina protocollo (HTTPS se porta 443 o host contiene https)
+    if [[ "$MINIO_PORT" == "443" ]] || [[ "$MINIO_HOST" =~ ^https:// ]]; then
+        MINIO_PROTOCOL="https"
+    else
+        MINIO_PROTOCOL="http"
+    fi
+
     # Test connessione MinIO con admin
-    if /usr/local/bin/mc alias set minio-admin http://$MINIO_HOST:$MINIO_PORT $MINIO_ADMIN_USER $MINIO_ADMIN_PASSWORD &>/dev/null; then
+    if /usr/local/bin/mc alias set minio-admin $MINIO_PROTOCOL://$CLEAN_MINIO_HOST:$MINIO_PORT $MINIO_ADMIN_USER $MINIO_ADMIN_PASSWORD &>/dev/null; then
         log_success "Connessione MinIO Admin OK"
     else
         log_error "Impossibile connettersi a MinIO con credenziali admin"
@@ -591,7 +601,7 @@ EOF
     fi
 
     # Test con utente WordPress
-    if /usr/local/bin/mc alias set minio-wp http://$MINIO_HOST:$MINIO_PORT $MINIO_USER $MINIO_PASSWORD &>/dev/null; then
+    if /usr/local/bin/mc alias set minio-wp $MINIO_PROTOCOL://$CLEAN_MINIO_HOST:$MINIO_PORT $MINIO_USER $MINIO_PASSWORD &>/dev/null; then
         log_success "Utente WordPress MinIO configurato correttamente"
     else
         log_error "Errore configurazione utente WordPress MinIO"
