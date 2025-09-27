@@ -551,7 +551,8 @@ setup_phpfpm_for_proxy() {
     log_info "Configurazione PHP-FPM per Nginx Proxy Manager esterno..."
 
     # Configura PHP-FPM per ascoltare su porta TCP invece di socket
-    sed -i 's/listen = \/var\/run\/php\/php8.3-fpm.sock/listen = 9000/' /etc/php/8.3/fpm/pool.d/www.conf
+    sed -i 's|listen = /var/run/php/php8.3-fpm.sock|listen = 9000|' /etc/php/8.3/fpm/pool.d/www.conf
+    sed -i 's|listen = /run/php/php8.3-fpm.sock|listen = 9000|' /etc/php/8.3/fpm/pool.d/www.conf
     sed -i 's/;listen.allowed_clients = 127.0.0.1/listen.allowed_clients = any/' /etc/php/8.3/fpm/pool.d/www.conf
 
     # Configura user e group
@@ -568,10 +569,15 @@ setup_phpfpm_for_proxy() {
     systemctl enable php8.3-fpm
 
     # Verifica che PHP-FPM stia ascoltando sulla porta 9000
-    if netstat -ln | grep -q ":9000 "; then
+    sleep 2  # Aspetta che PHP-FPM si riavvii
+    if ss -ln | grep -q ":9000" || netstat -ln | grep -q ":9000"; then
         log_success "PHP-FPM configurato correttamente sulla porta 9000"
     else
         log_error "Errore: PHP-FPM non sta ascoltando sulla porta 9000"
+        log_info "Configurazione attuale:"
+        grep "listen = " /etc/php/8.3/fpm/pool.d/www.conf
+        log_info "Porte in ascolto:"
+        ss -ln | grep ":900[0-9]" || netstat -ln | grep ":900[0-9]" || echo "Nessuna porta 900x in ascolto"
         exit 1
     fi
 
