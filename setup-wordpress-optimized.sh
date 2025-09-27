@@ -706,8 +706,8 @@ test_minio_connection() {
 }
 EOF
 
-    /usr/local/bin/mc admin policy add minio-admin wp-policy /tmp/wp-policy.json
-    /usr/local/bin/mc admin policy set minio-admin wp-policy user=$MINIO_USER
+    /usr/local/bin/mc admin policy create minio-admin wp-policy /tmp/wp-policy.json
+    /usr/local/bin/mc admin policy attach minio-admin wp-policy --user=$MINIO_USER
     rm /tmp/wp-policy.json
 
     # Verifica/Crea bucket
