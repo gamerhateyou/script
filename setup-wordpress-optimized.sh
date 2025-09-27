@@ -38,6 +38,7 @@ DEFAULT_WP_ADMIN="admin"
 DEFAULT_SITE_TITLE="WordPress Ottimizzato"
 DEFAULT_REDIS_HOST="redis.local"
 DEFAULT_REDIS_PORT="6379"
+DEFAULT_REDIS_PASSWORD=""
 DEFAULT_MINIO_HOST="minio.local"
 DEFAULT_MINIO_PORT="9000"
 DEFAULT_MINIO_BUCKET="wordpress-media"
@@ -104,14 +105,21 @@ collect_config() {
     log_info "Configurazione Redis esterno:"
     read_input "Host Redis" "$DEFAULT_REDIS_HOST" "REDIS_HOST"
     read_input "Porta Redis" "$DEFAULT_REDIS_PORT" "REDIS_PORT"
+    read_input "Password Redis (lascia vuoto se non protetto)" "$DEFAULT_REDIS_PASSWORD" "REDIS_PASSWORD"
     echo
 
     # MinIO
     log_info "Configurazione MinIO:"
     read_input "Host MinIO" "$DEFAULT_MINIO_HOST" "MINIO_HOST"
     read_input "Porta MinIO" "$DEFAULT_MINIO_PORT" "MINIO_PORT"
-    read_input "Username MinIO" "" "MINIO_USER"
-    read_password "Password MinIO" "MINIO_PASSWORD"
+
+    log_info "Credenziali MinIO Admin (per creare utente e bucket):"
+    read_input "Username Admin MinIO" "" "MINIO_ADMIN_USER"
+    read_password "Password Admin MinIO" "MINIO_ADMIN_PASSWORD"
+
+    log_info "Nuovo utente WordPress per MinIO:"
+    read_input "Username WordPress MinIO" "" "MINIO_USER"
+    read_password "Password WordPress MinIO" "MINIO_PASSWORD"
     read_input "Nome bucket" "$DEFAULT_MINIO_BUCKET" "MINIO_BUCKET"
     echo
 }
@@ -127,8 +135,6 @@ update_system() {
 install_base_packages() {
     log_info "Installazione pacchetti base PHP 8.3..."
     apt install -y \
-        nginx \
-        nginx-module-brotli \
         php8.3-fpm \
         php8.3-mysql \
         php8.3-redis \
@@ -150,7 +156,6 @@ install_base_packages() {
         curl \
         unzip \
         certbot \
-        python3-certbot-nginx \
         htop \
         nano \
         git \
@@ -193,13 +198,29 @@ test_mysql_connection() {
 test_redis_connection() {
     log_info "Test connessione Redis esterno..."
 
+    # Installa redis-cli se non presente
+    if ! command -v redis-cli &> /dev/null; then
+        log_info "Installazione redis-cli..."
+        apt install -y redis-tools
+    fi
+
     # Test connessione Redis
-    if redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ping &>/dev/null; then
-        log_success "Connessione Redis OK"
+    if [ -n "$REDIS_PASSWORD" ]; then
+        if redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" -a "$REDIS_PASSWORD" ping &>/dev/null; then
+            log_success "Connessione Redis OK (con password)"
+        else
+            log_error "Impossibile connettersi a Redis con password"
+            log_error "Verifica: host=$REDIS_HOST, porta=$REDIS_PORT, password"
+            exit 1
+        fi
     else
-        log_error "Impossibile connettersi a Redis esterno"
-        log_error "Verifica: host=$REDIS_HOST, porta=$REDIS_PORT"
-        exit 1
+        if redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ping &>/dev/null; then
+            log_success "Connessione Redis OK (senza password)"
+        else
+            log_error "Impossibile connettersi a Redis esterno"
+            log_error "Verifica: host=$REDIS_HOST, porta=$REDIS_PORT"
+            exit 1
+        fi
     fi
 }
 
@@ -241,6 +262,7 @@ define('WP_REDIS_HOST', '$REDIS_HOST');
 define('WP_REDIS_PORT', $REDIS_PORT);
 define('WP_REDIS_DATABASE', 0);
 define('WP_CACHE_KEY_SALT', '$SITE_URL');
+$([ -n "$REDIS_PASSWORD" ] && echo "define('WP_REDIS_PASSWORD', '$REDIS_PASSWORD');")
 
 // MinIO S3 Configuration
 define('AS3CF_SETTINGS', serialize(array(
@@ -384,143 +406,36 @@ install_plugins() {
     log_success "Plugin WordPress 2025 installati e configurati"
 }
 
-# Configurazione Nginx
-setup_nginx() {
-    log_info "Configurazione Nginx..."
+# Configurazione PHP-FPM per Nginx Proxy Manager esterno
+setup_phpfpm_for_proxy() {
+    log_info "Configurazione PHP-FPM per Nginx Proxy Manager esterno..."
 
-    # Enable Brotli module
-    echo "load_module modules/ngx_http_brotli_filter_module.so;" > /etc/nginx/modules-enabled/brotli.conf
-    echo "load_module modules/ngx_http_brotli_static_module.so;" >> /etc/nginx/modules-enabled/brotli.conf
+    # Configura PHP-FPM per ascoltare su porta TCP invece di socket
+    sed -i 's/listen = \/var\/run\/php\/php8.3-fpm.sock/listen = 9000/' /etc/php/8.3/fpm/pool.d/www.conf
+    sed -i 's/;listen.allowed_clients = 127.0.0.1/listen.allowed_clients = any/' /etc/php/8.3/fpm/pool.d/www.conf
 
-    cat > /etc/nginx/sites-available/wordpress << EOF
-server {
-    listen 80;
-    server_name $SITE_URL www.$SITE_URL;
-    root /var/www/html;
-    index index.php index.html index.htm;
+    # Configura user e group
+    sed -i 's/user = www-data/user = www-data/' /etc/php/8.3/fpm/pool.d/www.conf
+    sed -i 's/group = www-data/group = www-data/' /etc/php/8.3/fpm/pool.d/www.conf
 
-    # Security headers 2025
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header X-XSS-Protection "1; mode=block" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:" always;
-    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
-    add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
+    # Ottimizzazioni per container
+    echo "; Container optimizations" >> /etc/php/8.3/fpm/pool.d/www.conf
+    echo "clear_env = no" >> /etc/php/8.3/fpm/pool.d/www.conf
+    echo "catch_workers_output = yes" >> /etc/php/8.3/fpm/pool.d/www.conf
 
-    # Modern compression 2025
-    gzip on;
-    gzip_vary on;
-    gzip_min_length 1024;
-    gzip_comp_level 6;
-    gzip_proxied any;
-    gzip_types
-        text/plain
-        text/css
-        text/xml
-        text/javascript
-        text/x-component
-        application/javascript
-        application/x-javascript
-        application/json
-        application/xml
-        application/rss+xml
-        application/atom+xml
-        font/truetype
-        font/opentype
-        application/vnd.ms-fontobject
-        image/svg+xml;
+    # Restart e abilita PHP-FPM
+    systemctl restart php8.3-fpm
+    systemctl enable php8.3-fpm
 
-    # Brotli compression (if available)
-    brotli on;
-    brotli_comp_level 6;
-    brotli_types
-        text/plain
-        text/css
-        application/json
-        application/javascript
-        text/xml
-        application/xml
-        application/atom+xml
-        image/svg+xml;
+    # Verifica che PHP-FPM stia ascoltando sulla porta 9000
+    if netstat -ln | grep -q ":9000 "; then
+        log_success "PHP-FPM configurato correttamente sulla porta 9000"
+    else
+        log_error "Errore: PHP-FPM non sta ascoltando sulla porta 9000"
+        exit 1
+    fi
 
-    # Cache static files 2025
-    location ~* \.(jpg|jpeg|png|gif|ico|webp|avif|css|js|woff|woff2|ttf|eot|svg|pdf)$ {
-        expires 1y;
-        add_header Cache-Control "public, immutable";
-        add_header Vary "Accept-Encoding";
-        access_log off;
-        log_not_found off;
-    }
-
-    # WebP support
-    location ~* \.(png|jpe?g)$ {
-        add_header Vary Accept;
-        try_files $uri$webp_suffix $uri =404;
-    }
-
-    # Rate limiting
-    limit_req_zone \$binary_remote_addr zone=wp_login:10m rate=1r/s;
-    limit_req_zone \$binary_remote_addr zone=wp_admin:10m rate=5r/s;
-
-    # WordPress login protection
-    location = /wp-login.php {
-        limit_req zone=wp_login burst=2 nodelay;
-        include snippets/fastcgi-php.conf;
-        fastcgi_pass unix:/var/run/php/php8.3-fpm.sock;
-    }
-
-    # WordPress admin protection
-    location ^~ /wp-admin/ {
-        limit_req zone=wp_admin burst=5 nodelay;
-        try_files \$uri \$uri/ /index.php?\$args;
-    }
-
-    # WordPress security
-    location = /favicon.ico { log_not_found off; access_log off; }
-    location = /robots.txt { log_not_found off; access_log off; allow all; }
-    location ~* /(?:uploads|files)/.*\.php$ { deny all; }
-    location ~ /\. { deny all; }
-    location ~ ~$ { deny all; }
-
-    # WordPress permalinks
-    location / {
-        try_files \$uri \$uri/ /index.php?\$args;
-    }
-
-    # PHP processing
-    location ~ \.php$ {
-        include snippets/fastcgi-php.conf;
-        fastcgi_pass unix:/var/run/php/php8.3-fpm.sock;
-        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
-        include fastcgi_params;
-
-        # Security
-        fastcgi_hide_header X-Powered-By;
-
-        # Cache
-        fastcgi_cache_valid 200 60m;
-    }
-
-    # Block access to sensitive files
-    location ~* /(?:wp-config\.php|wp-admin/includes|wp-includes/.*\.php|wp-content/uploads/.*\.php)$ {
-        deny all;
-    }
-}
-EOF
-
-    # Rimozione configurazione default
-    rm -f /etc/nginx/sites-enabled/default
-
-    # Attivazione sito
-    ln -sf /etc/nginx/sites-available/wordpress /etc/nginx/sites-enabled/
-
-    # Test configurazione
-    nginx -t
-    systemctl restart nginx
-    systemctl enable nginx
-
-    log_success "Nginx configurato"
+    log_success "PHP-FPM configurato per proxy esterno"
 }
 
 # Configurazione PHP 8.3-FPM ottimizzata per WordPress 2025
@@ -618,29 +533,69 @@ test_minio_connection() {
     wget https://dl.min.io/client/mc/release/linux-amd64/mc -O /usr/local/bin/mc
     chmod +x /usr/local/bin/mc
 
-    # Test connessione MinIO
-    if /usr/local/bin/mc alias set minio http://$MINIO_HOST:$MINIO_PORT $MINIO_USER $MINIO_PASSWORD &>/dev/null; then
-        log_success "Connessione MinIO OK"
+    # Test connessione MinIO con admin
+    if /usr/local/bin/mc alias set minio-admin http://$MINIO_HOST:$MINIO_PORT $MINIO_ADMIN_USER $MINIO_ADMIN_PASSWORD &>/dev/null; then
+        log_success "Connessione MinIO Admin OK"
     else
-        log_error "Impossibile connettersi a MinIO esterno"
-        log_error "Verifica: host=$MINIO_HOST, porta=$MINIO_PORT, credenziali"
+        log_error "Impossibile connettersi a MinIO con credenziali admin"
+        log_error "Verifica: host=$MINIO_HOST, porta=$MINIO_PORT, admin credenziali"
         exit 1
     fi
 
-    # Verifica esistenza bucket
-    if /usr/local/bin/mc ls minio/$MINIO_BUCKET &>/dev/null; then
+    # Crea utente WordPress per MinIO
+    log_info "Creazione utente WordPress per MinIO..."
+    /usr/local/bin/mc admin user add minio-admin $MINIO_USER $MINIO_PASSWORD &>/dev/null || log_warning "Utente già esistente"
+
+    # Crea policy per il bucket
+    cat > /tmp/wp-policy.json << EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetBucketLocation",
+        "s3:ListBucket"
+      ],
+      "Resource": [
+        "arn:aws:s3:::$MINIO_BUCKET"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:DeleteObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::$MINIO_BUCKET/*"
+      ]
+    }
+  ]
+}
+EOF
+
+    /usr/local/bin/mc admin policy add minio-admin wp-policy /tmp/wp-policy.json
+    /usr/local/bin/mc admin policy set minio-admin wp-policy user=$MINIO_USER
+    rm /tmp/wp-policy.json
+
+    # Verifica/Crea bucket
+    if /usr/local/bin/mc ls minio-admin/$MINIO_BUCKET &>/dev/null; then
         log_success "Bucket $MINIO_BUCKET esistente"
     else
-        log_warning "Bucket $MINIO_BUCKET non trovato, creazione necessaria"
-        read -p "Creare il bucket $MINIO_BUCKET? (y/N): " create_bucket
-        if [[ $create_bucket == [yY] ]]; then
-            /usr/local/bin/mc mb minio/$MINIO_BUCKET
-            /usr/local/bin/mc policy set download minio/$MINIO_BUCKET
-            log_success "Bucket $MINIO_BUCKET creato e configurato"
-        else
-            log_error "Bucket necessario per continuare"
-            exit 1
-        fi
+        log_info "Creazione bucket $MINIO_BUCKET..."
+        /usr/local/bin/mc mb minio-admin/$MINIO_BUCKET
+        /usr/local/bin/mc policy set download minio-admin/$MINIO_BUCKET
+        log_success "Bucket $MINIO_BUCKET creato e configurato"
+    fi
+
+    # Test con utente WordPress
+    if /usr/local/bin/mc alias set minio-wp http://$MINIO_HOST:$MINIO_PORT $MINIO_USER $MINIO_PASSWORD &>/dev/null; then
+        log_success "Utente WordPress MinIO configurato correttamente"
+    else
+        log_error "Errore configurazione utente WordPress MinIO"
+        exit 1
     fi
 }
 
@@ -822,7 +777,7 @@ final_test() {
     log_info "Test finale del sistema..."
 
     # Test servizi
-    systemctl is-active --quiet nginx && log_success "Nginx: OK" || log_error "Nginx: ERRORE"
+    systemctl is-active --quiet php8.3-fpm && log_success "PHP-FPM: OK" || log_error "PHP-FPM: ERRORE"
     systemctl is-active --quiet php8.3-fpm && log_success "PHP-FPM: OK" || log_error "PHP-FPM: ERRORE"
 
     # Test connessione database esterno
@@ -891,20 +846,13 @@ main() {
     install_wp_cli
     setup_wordpress_cli
     install_plugins
-    setup_nginx
+    setup_phpfpm_for_proxy
     optimize_php
     system_optimizations
     setup_backup
     install_monitoring_tools
 
-    # SSL opzionale (solo se NON si usa Nginx Proxy Manager)
-    log_info "NOTA: Se usi Nginx Proxy Manager, configura SSL tramite il proxy manager"
-    read -p "Configurare SSL direttamente su questo container con Let's Encrypt? (y/N): " ssl_confirm
-    if [[ $ssl_confirm == [yY] ]]; then
-        setup_ssl
-    else
-        log_info "SSL saltato - configurazione tramite Nginx Proxy Manager"
-    fi
+    log_info "SSL configurazione saltata - usa Nginx Proxy Manager per SSL/TLS"
 
     cleanup
     final_test

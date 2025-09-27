@@ -4,16 +4,16 @@ Script di installazione automatica per WordPress ottimizzato con servizi esterni
 
 ## Architettura
 
-Il container WordPress si connette a **tre servizi esterni**:
+Il container WordPress si connette a **quattro servizi esterni**:
 
+- **Nginx Proxy Manager** - Proxy reverso con SSL automatico
 - **MySQL/MariaDB** - Database esterno
 - **Redis** - Cache oggetti esterno
 - **MinIO** - Storage S3 compatibile esterno
 
 ## Servizi installati nel container
 
-- **Nginx** - Web server ottimizzato
-- **PHP 8.3-FPM** - Con JIT OPcache e ottimizzazioni 2025
+- **PHP 8.3-FPM** - Con JIT OPcache e ottimizzazioni 2025 (porta 9000)
 - **WordPress** - Ultima versione
 - **WP-CLI** - Command line interface
 - **Plugin essenziali** - Cache, SEO, sicurezza
@@ -22,15 +22,19 @@ Il container WordPress si connette a **tre servizi esterni**:
 
 ### Container di servizi esterni
 
-1. **Container MySQL/MariaDB**
+1. **Container Nginx Proxy Manager**
+   - Porta 80, 443 (web) e 81 (admin) esposte
+   - Configurato per proxy reverso verso container WordPress
+
+2. **Container MySQL/MariaDB**
    - Porta 3306 esposta
    - Database e utente creati (o permessi di creazione)
 
-2. **Container Redis**
+3. **Container Redis**
    - Porta 6379 esposta
    - Accessibile da rete
 
-3. **Container MinIO**
+4. **Container MinIO**
    - Porta 9000 esposta
    - Credenziali admin configurate
 
@@ -81,13 +85,11 @@ Il container WordPress si connette a **tre servizi esterni**:
 
 **Cache e Performance:**
 - Redis Object Cache
-- W3 Total Cache
 - Autoptimize
 - WP Optimize
 
 **SEO:**
 - Yoast SEO
-- RankMath
 
 **Sicurezza:**
 - Wordfence Security
