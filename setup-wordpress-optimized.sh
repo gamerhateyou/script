@@ -43,6 +43,39 @@ DEFAULT_MINIO_HOST="minio.local"
 DEFAULT_MINIO_PORT="9000"
 DEFAULT_MINIO_BUCKET="wordpress-media"
 
+# Funzione di retry per connessioni
+retry_connection() {
+    local service_name="$1"
+    local test_command="$2"
+    local max_retries=3
+    local retry_count=0
+
+    while [ $retry_count -lt $max_retries ]; do
+        log_info "Test connessione $service_name (tentativo $((retry_count + 1))/$max_retries)..."
+
+        if eval "$test_command"; then
+            log_success "Connessione $service_name OK"
+            return 0
+        else
+            retry_count=$((retry_count + 1))
+            if [ $retry_count -lt $max_retries ]; then
+                log_warning "Connessione $service_name fallita, riprovo in 3 secondi..."
+                sleep 3
+            fi
+        fi
+    done
+
+    log_error "Connessione $service_name fallita dopo $max_retries tentativi"
+    log_error "Vuoi riconfigurare $service_name? (y/N)"
+    read -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        return 1  # Indica che bisogna riconfigurare
+    else
+        exit 1
+    fi
+}
+
 # Funzione per input utente con default
 read_input() {
     local prompt="$1"
@@ -83,13 +116,40 @@ collect_config() {
     log_info "=== Configurazione WordPress Ottimizzato ==="
     echo
 
-    # Database esterno
-    log_info "Configurazione Database MySQL/MariaDB esterno:"
-    read_input "Host database" "$DEFAULT_DB_HOST" "DB_HOST"
-    read_input "Porta database" "$DEFAULT_DB_PORT" "DB_PORT"
-    read_input "Nome database" "$DEFAULT_DB_NAME" "DB_NAME"
-    read_input "Utente database" "$DEFAULT_DB_USER" "DB_USER"
-    read_password "Password database" "DB_PASSWORD"
+    # Database esterno con test immediato
+    while true; do
+        log_info "Configurazione Database MySQL/MariaDB esterno:"
+        read_input "Host database" "$DEFAULT_DB_HOST" "DB_HOST"
+        read_input "Porta database" "$DEFAULT_DB_PORT" "DB_PORT"
+        read_input "Nome database" "$DEFAULT_DB_NAME" "DB_NAME"
+        read_input "Utente database" "$DEFAULT_DB_USER" "DB_USER"
+        read_password "Password database" "DB_PASSWORD"
+
+        # Test immediato connessione MySQL
+        test_cmd="mysql -h \"$DB_HOST\" -P \"$DB_PORT\" -u \"$DB_USER\" -p\"$DB_PASSWORD\" -e 'SELECT 1;' &>/dev/null"
+        if retry_connection "MySQL" "$test_cmd"; then
+            # Test esistenza database
+            db_test_cmd="mysql -h \"$DB_HOST\" -P \"$DB_PORT\" -u \"$DB_USER\" -p\"$DB_PASSWORD\" -e 'USE $DB_NAME;' &>/dev/null"
+            if eval "$db_test_cmd"; then
+                log_success "Database $DB_NAME verificato"
+                break
+            else
+                log_warning "Database $DB_NAME non esistente"
+                read -p "Creare il database $DB_NAME? (y/N): " create_db
+                if [[ $create_db =~ ^[Yy]$ ]]; then
+                    if mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" -e "CREATE DATABASE IF NOT EXISTS $DB_NAME CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" &>/dev/null; then
+                        log_success "Database $DB_NAME creato"
+                        break
+                    else
+                        log_error "Errore nella creazione del database"
+                    fi
+                fi
+            fi
+        else
+            log_warning "Riconfigurazione database necessaria..."
+            continue
+        fi
+    done
     echo
 
     # WordPress Admin
@@ -101,26 +161,86 @@ collect_config() {
     read_input "URL sito" "" "SITE_URL"
     echo
 
-    # Redis esterno
-    log_info "Configurazione Redis esterno:"
-    read_input "Host Redis" "$DEFAULT_REDIS_HOST" "REDIS_HOST"
-    read_input "Porta Redis" "$DEFAULT_REDIS_PORT" "REDIS_PORT"
-    read_input "Password Redis (lascia vuoto se non protetto)" "$DEFAULT_REDIS_PASSWORD" "REDIS_PASSWORD"
+    # Redis esterno con test immediato
+    while true; do
+        log_info "Configurazione Redis esterno:"
+        read_input "Host Redis" "$DEFAULT_REDIS_HOST" "REDIS_HOST"
+        read_input "Porta Redis" "$DEFAULT_REDIS_PORT" "REDIS_PORT"
+        read_input "Password Redis (lascia vuoto se non protetto)" "$DEFAULT_REDIS_PASSWORD" "REDIS_PASSWORD"
+
+        # Installa redis-cli se non presente
+        if ! command -v redis-cli &> /dev/null; then
+            log_info "Installazione redis-cli..."
+            apt update && apt install -y redis-tools
+        fi
+
+        # Test immediato connessione Redis
+        if [ -n "$REDIS_PASSWORD" ]; then
+            test_cmd="redis-cli -h \"$REDIS_HOST\" -p \"$REDIS_PORT\" -a \"$REDIS_PASSWORD\" ping &>/dev/null"
+        else
+            test_cmd="redis-cli -h \"$REDIS_HOST\" -p \"$REDIS_PORT\" ping &>/dev/null"
+        fi
+
+        if retry_connection "Redis" "$test_cmd"; then
+            if [ -n "$REDIS_PASSWORD" ]; then
+                log_success "Redis connesso con autenticazione"
+            else
+                log_success "Redis connesso senza autenticazione"
+            fi
+            break
+        else
+            log_warning "Riconfigurazione Redis necessaria..."
+            continue
+        fi
+    done
     echo
 
-    # MinIO
-    log_info "Configurazione MinIO:"
-    read_input "Host MinIO" "$DEFAULT_MINIO_HOST" "MINIO_HOST"
-    read_input "Porta MinIO" "$DEFAULT_MINIO_PORT" "MINIO_PORT"
+    # MinIO con test immediato
+    while true; do
+        log_info "Configurazione MinIO:"
+        read_input "Host MinIO" "$DEFAULT_MINIO_HOST" "MINIO_HOST"
+        read_input "Porta MinIO" "$DEFAULT_MINIO_PORT" "MINIO_PORT"
 
-    log_info "Credenziali MinIO Admin (per creare utente e bucket):"
-    read_input "Username Admin MinIO" "" "MINIO_ADMIN_USER"
-    read_password "Password Admin MinIO" "MINIO_ADMIN_PASSWORD"
+        log_info "Credenziali MinIO Admin (per creare utente e bucket):"
+        read_input "Username Admin MinIO" "" "MINIO_ADMIN_USER"
+        read_password "Password Admin MinIO" "MINIO_ADMIN_PASSWORD"
 
-    log_info "Nuovo utente WordPress per MinIO:"
-    read_input "Username WordPress MinIO" "" "MINIO_USER"
-    read_password "Password WordPress MinIO" "MINIO_PASSWORD"
-    read_input "Nome bucket" "$DEFAULT_MINIO_BUCKET" "MINIO_BUCKET"
+        # Installa MinIO Client se non presente
+        if ! command -v mc &> /dev/null; then
+            log_info "Installazione MinIO Client..."
+            wget https://dl.min.io/client/mc/release/linux-amd64/mc -O /usr/local/bin/mc &>/dev/null
+            chmod +x /usr/local/bin/mc
+        fi
+
+        # Pulisci URL MinIO se contiene protocollo
+        CLEAN_MINIO_HOST=$(echo "$MINIO_HOST" | sed 's|https\?://||')
+
+        # Determina protocollo
+        if [[ "$MINIO_PORT" == "443" ]] || [[ "$MINIO_HOST" =~ ^https:// ]]; then
+            MINIO_PROTOCOL="https"
+        else
+            MINIO_PROTOCOL="http"
+        fi
+
+        # Test immediato connessione MinIO Admin
+        test_cmd="/usr/local/bin/mc alias set test-admin $MINIO_PROTOCOL://$CLEAN_MINIO_HOST:$MINIO_PORT $MINIO_ADMIN_USER $MINIO_ADMIN_PASSWORD &>/dev/null"
+        if retry_connection "MinIO Admin" "$test_cmd"; then
+            log_success "MinIO Admin autenticato"
+            /usr/local/bin/mc alias remove test-admin &>/dev/null
+
+            log_info "Nuovo utente WordPress per MinIO:"
+            read_input "Username WordPress MinIO" "" "MINIO_USER"
+            read_password "Password WordPress MinIO" "MINIO_PASSWORD"
+            read_input "Nome bucket" "$DEFAULT_MINIO_BUCKET" "MINIO_BUCKET"
+
+            log_info "URL pubblico MinIO (per serving immagini ai visitatori):"
+            read_input "URL pubblico MinIO" "https://$CLEAN_MINIO_HOST" "MINIO_PUBLIC_URL"
+            break
+        else
+            log_warning "Riconfigurazione MinIO necessaria..."
+            continue
+        fi
+    done
     echo
 }
 
@@ -264,7 +384,7 @@ define('WP_REDIS_DATABASE', 0);
 define('WP_CACHE_KEY_SALT', '$SITE_URL');
 $([ -n "$REDIS_PASSWORD" ] && echo "define('WP_REDIS_PASSWORD', '$REDIS_PASSWORD');")
 
-// MinIO S3 Configuration
+// MinIO S3 Configuration - Doppia configurazione per performance
 define('AS3CF_SETTINGS', serialize(array(
     'provider' => 'other',
     'access-key-id' => '$MINIO_USER',
@@ -273,8 +393,8 @@ define('AS3CF_SETTINGS', serialize(array(
     'region' => 'us-east-1',
     'copy-to-s3' => true,
     'serve-from-s3' => true,
-    'domain' => 'path',
-    'cloudfront' => '',
+    'domain' => 'cloudfront',
+    'cloudfront' => '$MINIO_PUBLIC_URL',
     'object-prefix' => '',
     'use-server-roles' => false,
     'endpoint' => '$CLEAN_MINIO_HOST:$MINIO_PORT',
@@ -724,10 +844,18 @@ RESPONSE_TIME=\$(curl -o /dev/null -s -w '%{time_total}' http://localhost)
 echo "[\$DATE] Response time: \$RESPONSE_TIME seconds" >> \$LOG_FILE
 
 # Check Redis connection
-if redis-cli -h $REDIS_HOST -p $REDIS_PORT ping > /dev/null 2>&1; then
-    echo "[\$DATE] Redis: OK" >> \$LOG_FILE
+if [ -n "$REDIS_PASSWORD" ]; then
+    if redis-cli -h $REDIS_HOST -p $REDIS_PORT -a $REDIS_PASSWORD ping > /dev/null 2>&1; then
+        echo "[\$DATE] Redis: OK" >> \$LOG_FILE
+    else
+        echo "[\$DATE] Redis: ERROR" >> \$LOG_FILE
+    fi
 else
-    echo "[\$DATE] Redis: ERROR" >> \$LOG_FILE
+    if redis-cli -h $REDIS_HOST -p $REDIS_PORT ping > /dev/null 2>&1; then
+        echo "[\$DATE] Redis: OK" >> \$LOG_FILE
+    else
+        echo "[\$DATE] Redis: ERROR" >> \$LOG_FILE
+    fi
 fi
 
 # Check database connection
@@ -790,11 +918,8 @@ final_test() {
     systemctl is-active --quiet php8.3-fpm && log_success "PHP-FPM: OK" || log_error "PHP-FPM: ERRORE"
     systemctl is-active --quiet php8.3-fpm && log_success "PHP-FPM: OK" || log_error "PHP-FPM: ERRORE"
 
-    # Test connessione database esterno
-    mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" -e "SELECT 1;" "$DB_NAME" &>/dev/null && log_success "Database: OK" || log_error "Database: ERRORE"
-
-    # Test Redis esterno
-    redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ping &>/dev/null && log_success "Redis ping: OK" || log_error "Redis ping: ERRORE"
+    # I test dei servizi esterni sono già stati fatti durante la configurazione
+    log_info "Servizi esterni già verificati durante la configurazione"
 
     # Test WordPress specifici
     if curl -s -o /dev/null -w "%{http_code}" "http://localhost" | grep -q "200"; then
