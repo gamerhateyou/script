@@ -459,7 +459,7 @@ install_wp_cli() {
     # Download WP-CLI con verifiche (URL ufficiale)
     if curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar; then
         # Verifica che il file sia stato scaricato correttamente
-        if [ -s wp-cli.phar ] && file wp-cli.phar | grep -q "PHP script"; then
+        if [ -s wp-cli.phar ] && (file wp-cli.phar | grep -q "PHP\|PHAR\|executable" || php wp-cli.phar --version &>/dev/null); then
             chmod +x wp-cli.phar
             mv wp-cli.phar /usr/local/bin/wp
 
